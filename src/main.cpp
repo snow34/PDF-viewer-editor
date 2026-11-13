@@ -20,9 +20,12 @@ int main(int argc, char **argv)
                                                  "(for automated checks)."),
                                   QStringLiteral("png"));
     parser.addOption(screenshot);
+    QCommandLineOption safeMode(QStringLiteral("safe-mode"),
+                                QStringLiteral("Ignore the customised theme and layout."));
+    parser.addOption(safeMode);
     parser.process(app);
 
-    MainWindow window;
+    MainWindow window(parser.isSet(safeMode));
     window.show();
     if (!parser.positionalArguments().isEmpty()) {
         if (parser.isSet(screenshot))

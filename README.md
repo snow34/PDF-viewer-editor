@@ -66,12 +66,50 @@ In the same window you can also:
 No press profiles are included with the app. Free ones (for example the
 FOGRA/PSO profiles) can be downloaded from eci.org and imported.
 
+## How to change the look and layout (Developer mode)
+
+You can change colours and fonts, decide what is in the toolbar and menus,
+and set your own keyboard shortcuts. No programming is needed: you edit two
+text files and the running app updates as soon as you save.
+
+1. Switch on **Customise > Developer mode**.
+2. Choose **Customise > Open customisation folder**. It contains:
+   - `theme.qss` — colours, fonts and spacing. It includes a ready-made dark
+     theme: remove the `/*` and `*/` around that block and save.
+   - `layout.json` — the toolbar buttons, the menus and the shortcuts.
+   - `HOW-TO.txt` — explains both files and lists every item you can place.
+3. Edit a file in any text editor and save. The app changes straight away.
+
+Example: a toolbar with only three buttons, and a different shortcut for Open:
+
+```json
+{
+  "toolbar": ["file.open", "-", "view.zoomOut", "view.zoomIn"],
+  "menus": [
+    { "title": "&File", "items": ["file.open", "file.recent", "-", "file.quit"] }
+  ],
+  "shortcuts": { "file.open": "Ctrl+Shift+O" }
+}
+```
+
+If something goes wrong:
+
+- A mistake in `layout.json` is reported at the bottom of the window with the
+  line number, and the standard layout is used until you fix it.
+- The **Customise** menu can never be removed, so you can always get back.
+- **Customise > Reset to defaults** deletes your two files.
+- Starting the app with `--safe-mode` ignores your files once.
+
+Your changes stay in effect when Developer mode is switched off; the switch
+only controls the editing tools and the automatic reload.
+
+What you cannot change this way (yet): what the tools do, the contents of the
+Output Preview window, and the colours of the page box lines.
+
 ## How to install on Windows
 
-1. Download `PrepressPDF-…-setup.exe`. Until there is a Releases page, it is
-   under **Actions** on GitHub: open the newest run with a green tick, scroll
-   to **Artifacts** and download **windows-installer** (you must be signed in
-   to GitHub). Unzip it.
+1. Go to the [Releases page](https://github.com/snow34/PDF-viewer-editor/releases)
+   and download `PrepressPDF-…-setup.exe` from the newest release.
 2. Double-click the setup file. Windows may show "Windows protected your PC"
    because the installer is not digitally signed: click **More info**, then
    **Run anyway**.

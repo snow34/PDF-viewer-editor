@@ -6,6 +6,11 @@
 #include <QCheckBox>
 #include <QDockWidget>
 #include <QLabel>
+#include <QMenu>
+#include <QMenuBar>
+#include <QStatusBar>
+#include <QTemporaryDir>
+#include <QToolBar>
 #include <QStandardPaths>
 #include <QTreeWidget>
 #include <QtTest>
@@ -16,6 +21,28 @@ class TestUi : public QObject {
     MainWindow *window = nullptr;
     QTreeWidget *inks = nullptr;
     QWidget *canvas = nullptr;
+    QTemporaryDir configDir;
+
+    QStringList toolbarTexts() const
+    {
+        QStringList texts;
+        for (QAction *a : window->findChild<QToolBar *>(QStringLiteral("mainToolBar"))->actions())
+            texts << (a->isSeparator() ? QStringLiteral("-") : a->text().remove(QLatin1Char('&')));
+        return texts;
+    }
+    QStringList menuTitles() const
+    {
+        QStringList titles;
+        for (QAction *a : window->menuBar()->actions())
+            titles << a->text().remove(QLatin1Char('&'));
+        return titles;
+    }
+    void writeFile(const QString &name, const QByteArray &content)
+    {
+        QFile f(configDir.filePath(name));
+        QVERIFY(f.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        f.write(content);
+    }
 
     double zoom() const { return (canvas->width() - 24) / 300.0; }
     // Widget position of a point given in PDF points (origin bottom-left).
@@ -39,6 +66,7 @@ private slots:
         QCoreApplication::setOrganizationName(QStringLiteral("PrepressPdfTest"));
         QCoreApplication::setApplicationName(QStringLiteral("PrepressPdfTest"));
         QSettings().clear();
+        qputenv("PREPRESSPDF_CONFIG_DIR", configDir.path().toLocal8Bit());
         window = new MainWindow;
         window->show();
         QVERIFY(QTest::qWaitForWindowExposed(window));
@@ -95,6 +123,70 @@ private slots:
         QVERIFY(preview->isWindow()); // moving it never docks it
         if (qEnvironmentVariableIsSet("UI_SCREENSHOT"))
             preview->grab().save(qEnvironmentVariable("UI_SCREENSHOT") + ".preview.png");
+    }
+
+    void defaultLayout()
+    {
+        QCOMPARE(menuTitles(), QStringList({ "File", "View", "Tools", "Window", "Customise" }));
+        QCOMPARE(toolbarTexts().first(), QStringLiteral("Open…"));
+        QVERIFY(qApp->styleSheet().isEmpty());
+        QVERIFY(!QFile::exists(configDir.filePath("layout.json"))); // nothing written until dev mode
+    }
+
+    void developerModeWritesEditableFiles()
+    {
+        window->findChild<QAction *>(QStringLiteral("devMode"))->setChecked(true);
+        QVERIFY(QFile::exists(configDir.filePath("layout.json")));
+        QVERIFY(QFile::exists(configDir.filePath("theme.qss")));
+        QFile guide(configDir.filePath("HOW-TO.txt"));
+        QVERIFY(guide.open(QIODevice::ReadOnly));
+        QVERIFY(guide.readAll().contains("view.zoomIn"));
+        // The generated files reproduce the standard layout exactly.
+        QCOMPARE(menuTitles(), QStringList({ "File", "View", "Tools", "Window", "Customise" }));
+    }
+
+    void editingLayoutUpdatesTheRunningApp()
+    {
+        writeFile("layout.json", R"({
+            "toolbar": ["view.zoomIn", "-", "file.open", "no.such.item"],
+            "menus": [ { "title": "&Document", "items": ["file.open", "file.quit"] } ],
+            "shortcuts": { "file.open": "Ctrl+Shift+O" } })");
+        QTRY_COMPARE(toolbarTexts(), QStringList({ "Zoom in", "-", "Open…" })); // picked up without a restart
+        QCOMPARE(menuTitles(), QStringList({ "Document", "Customise" }));    // Customise always stays
+        QCOMPARE(window->menuBar()->actions().first()->menu()->actions().first()->shortcut(),
+                 QKeySequence("Ctrl+Shift+O"));
+        QVERIFY(window->statusBar()->currentMessage().contains("no.such.item"));
+    }
+
+    void brokenLayoutFallsBackToDefault()
+    {
+        writeFile("layout.json", "{ \"toolbar\": [ \n oops");
+        QTRY_COMPARE(menuTitles(), QStringList({ "File", "View", "Tools", "Window", "Customise" }));
+        QVERIFY(window->statusBar()->currentMessage().contains("layout.json, line 2"));
+    }
+
+    void editingThemeUpdatesTheRunningApp()
+    {
+        writeFile("theme.qss", "QToolBar { background: #ff0000; }");
+        QTRY_VERIFY(qApp->styleSheet().contains("#ff0000"));
+        auto *bar = window->findChild<QToolBar *>(QStringLiteral("mainToolBar"));
+        auto isRed = [bar] {
+            const QColor c = bar->grab().toImage().pixelColor(bar->width() - 3, bar->height() / 2);
+            return c.red() > 200 && c.green() < 60 && c.blue() < 60;
+        };
+        QTRY_VERIFY(isRed());
+        if (qEnvironmentVariableIsSet("UI_SCREENSHOT"))
+            window->grab().save(qEnvironmentVariable("UI_SCREENSHOT") + ".themed.png");
+    }
+
+    void safeModeIgnoresCustomisation()
+    {
+        MainWindow safe(true);
+        QStringList titles;
+        for (QAction *a : safe.menuBar()->actions())
+            titles << a->text().remove(QLatin1Char('&'));
+        QCOMPARE(titles, QStringList({ "File", "View", "Tools", "Window", "Customise" }));
+        QVERIFY(qApp->styleSheet().isEmpty());
     }
 
     void cleanupTestCase() { delete window; }

@@ -7,6 +7,12 @@
 #include "engine/Compositor.h"
 
 #include <QApplication>
+#include <QDesktopServices>
+#include <QHBoxLayout>
+#include <QMenu>
+#include <QUrl>
+#include <QWidgetAction>
+#include <QDir>
 #include <QDockWidget>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -28,7 +34,7 @@ const double kMaxPixels = 60e6; // keeps a rendered page within a sensible amoun
 const double kMmPerPoint = 25.4 / 72.0;
 } // namespace
 
-MainWindow::MainWindow()
+MainWindow::MainWindow(bool safeMode) : m_safeMode(safeMode)
 {
     qRegisterMetaType<engine::PageRender>();
     qRegisterMetaType<engine::DocumentInfo>();
@@ -60,9 +66,9 @@ MainWindow::MainWindow()
     statusBar()->addPermanentWidget(m_zoomLabel);
 
     buildActions();
-    QAction *togglePreview = m_previewWindow->toggleViewAction();
-    togglePreview->setShortcut(QKeySequence(tr("Ctrl+Shift+Y")));
-    menuBar()->addMenu(tr("&Window"))->addAction(togglePreview);
+    connect(&m_customization, &Customization::changed, this, &MainWindow::applyCustomization);
+    m_customization.setWatching(m_devModeAction->isChecked());
+    applyCustomization();
 
     m_worker = new RenderWorker;
     m_worker->moveToThread(&m_thread);
@@ -98,59 +104,223 @@ MainWindow::~MainWindow()
     m_thread.wait();
 }
 
+QAction *MainWindow::addItem(const QString &id, const QString &text, const QString &help,
+                             const QKeySequence &shortcut)
+{
+    auto *action = new QAction(text, this);
+    action->setShortcut(shortcut);
+    addAction(action); // keeps the shortcut working when the item is in no menu
+    m_items.insert(id, action);
+    m_defaultShortcuts.insert(id, shortcut);
+    m_itemHelp.append({ id, help });
+    return action;
+}
+
 void MainWindow::buildActions()
 {
-    auto *file = menuBar()->addMenu(tr("&File"));
-    auto *open = file->addAction(tr("&Open…"), QKeySequence::Open, this, &MainWindow::chooseFile);
-    m_recent = file->addMenu(tr("Open &recent"));
-    file->addAction(tr("&Properties…"), QKeySequence(tr("Ctrl+D")), this, &MainWindow::showProperties);
-    file->addSeparator();
-    file->addAction(tr("&Quit"), QKeySequence::Quit, qApp, &QApplication::quit);
+    // Every item gets an id. layout.json decides where the items appear.
+    connect(addItem(QStringLiteral("file.open"), tr("&Open…"), tr("Open a PDF file"), QKeySequence::Open),
+            &QAction::triggered, this, &MainWindow::chooseFile);
+    connect(addItem(QStringLiteral("file.properties"), tr("&Properties…"), tr("Document properties"),
+                    QKeySequence(tr("Ctrl+D"))),
+            &QAction::triggered, this, &MainWindow::showProperties);
+    connect(addItem(QStringLiteral("file.quit"), tr("&Quit"), tr("Close the app"), QKeySequence::Quit),
+            &QAction::triggered, qApp, &QApplication::quit);
 
-    auto *view = menuBar()->addMenu(tr("&View"));
-    auto *zoomIn = view->addAction(tr("Zoom &in"), QKeySequence::ZoomIn, this, [this] { zoomBy(1); });
-    auto *zoomOut = view->addAction(tr("Zoom &out"), QKeySequence::ZoomOut, this, [this] { zoomBy(-1); });
-    view->addAction(tr("&Actual size"), QKeySequence(tr("Ctrl+1")), this, [this] {
-        m_fit = false;
-        m_fitAction->setChecked(false);
-        m_zoom = logicalDpiX() / 72.0;
-        render();
-    });
-    m_fitAction = view->addAction(tr("&Fit page"), QKeySequence(tr("Ctrl+0")), this, &MainWindow::setFit);
+    connect(addItem(QStringLiteral("view.zoomIn"), tr("Zoom &in"), tr("Zoom in"), QKeySequence::ZoomIn),
+            &QAction::triggered, this, [this] { zoomBy(1); });
+    connect(addItem(QStringLiteral("view.zoomOut"), tr("Zoom &out"), tr("Zoom out"), QKeySequence::ZoomOut),
+            &QAction::triggered, this, [this] { zoomBy(-1); });
+    connect(addItem(QStringLiteral("view.actualSize"), tr("&Actual size"), tr("Show the page at 100 %"),
+                    QKeySequence(tr("Ctrl+1"))),
+            &QAction::triggered, this, [this] {
+                m_fit = false;
+                m_fitAction->setChecked(false);
+                m_zoom = logicalDpiX() / 72.0;
+                render();
+            });
+    m_fitAction = addItem(QStringLiteral("view.fitPage"), tr("&Fit page"), tr("Fit the whole page in the window"),
+                          QKeySequence(tr("Ctrl+0")));
     m_fitAction->setCheckable(true);
     m_fitAction->setChecked(true);
-    view->addSeparator();
-    auto *prev = view->addAction(tr("&Previous page"), QKeySequence(Qt::Key_PageUp), this,
-                                 [this] { goToPage(m_page - 1); });
-    auto *next = view->addAction(tr("&Next page"), QKeySequence(Qt::Key_PageDown), this,
-                                 [this] { goToPage(m_page + 1); });
+    connect(m_fitAction, &QAction::triggered, this, &MainWindow::setFit);
+    connect(addItem(QStringLiteral("view.previousPage"), tr("&Previous page"), tr("Go to the previous page"),
+                    QKeySequence(Qt::Key_PageUp)),
+            &QAction::triggered, this, [this] { goToPage(m_page - 1); });
+    connect(addItem(QStringLiteral("view.nextPage"), tr("&Next page"), tr("Go to the next page"),
+                    QKeySequence(Qt::Key_PageDown)),
+            &QAction::triggered, this, [this] { goToPage(m_page + 1); });
 
-    auto *tools = menuBar()->addMenu(tr("&Tools"));
-    auto *profiles = tools->addAction(tr("&Colour profiles…"), this, &MainWindow::showProfiles);
+    connect(addItem(QStringLiteral("tools.profiles"), tr("&Colour profiles…"), tr("Manage ICC profiles")),
+            &QAction::triggered, this, &MainWindow::showProfiles);
 
-    auto *bar = addToolBar(tr("Main"));
-    bar->setObjectName(QStringLiteral("mainToolBar"));
-    bar->setMovable(false);
-    bar->setToolButtonStyle(Qt::ToolButtonTextOnly);
-    bar->addAction(open);
-    bar->addSeparator();
-    bar->addAction(prev);
+    QAction *togglePreview = m_previewWindow->toggleViewAction();
+    togglePreview->setShortcut(QKeySequence(tr("Ctrl+Shift+Y")));
+    addAction(togglePreview);
+    m_items.insert(QStringLiteral("window.outputPreview"), togglePreview);
+    m_defaultShortcuts.insert(QStringLiteral("window.outputPreview"), togglePreview->shortcut());
+    m_itemHelp.append({ QStringLiteral("window.outputPreview"), tr("Show or hide the Output Preview window") });
+
+    // Two items that are not plain commands.
+    m_recent = new QMenu(tr("Open &recent"), this);
+    m_items.insert(QStringLiteral("file.recent"), m_recent->menuAction());
+    m_itemHelp.append({ QStringLiteral("file.recent"), tr("Submenu with recently opened files (menus only)") });
+
+    auto *pageBox = new QWidget;
+    auto *pageLayout = new QHBoxLayout(pageBox);
+    pageLayout->setContentsMargins(0, 0, 0, 0);
     m_pageSpin = new QSpinBox;
     m_pageSpin->setRange(0, 0);
     m_pageSpin->setKeyboardTracking(false);
-    bar->addWidget(m_pageSpin);
     m_pageCount = new QLabel;
-    bar->addWidget(m_pageCount);
-    bar->addAction(next);
-    bar->addSeparator();
-    bar->addAction(zoomOut);
-    bar->addAction(zoomIn);
-    bar->addAction(m_fitAction);
-    bar->addSeparator();
-    bar->addAction(profiles);
+    pageLayout->addWidget(m_pageSpin);
+    pageLayout->addWidget(m_pageCount);
+    auto *pageAction = new QWidgetAction(this);
+    pageAction->setDefaultWidget(pageBox);
+    m_items.insert(QStringLiteral("pageNumber"), pageAction);
+    m_itemHelp.append({ QStringLiteral("pageNumber"), tr("Page number box (toolbar only)") });
     connect(m_pageSpin, &QSpinBox::valueChanged, this, [this](int v) { goToPage(v - 1); });
 
+    m_toolBar = addToolBar(tr("Main"));
+    m_toolBar->setObjectName(QStringLiteral("mainToolBar"));
+    m_toolBar->setMovable(false);
+    m_toolBar->setToolButtonStyle(Qt::ToolButtonTextOnly);
+
+    // The Customise menu is always added by the app and cannot be removed
+    // through layout.json, so there is always a way back.
+    m_customiseMenu = new QMenu(tr("&Customise"), this);
+    m_devModeAction = m_customiseMenu->addAction(tr("&Developer mode"));
+    m_devModeAction->setObjectName(QStringLiteral("devMode"));
+    m_devModeAction->setCheckable(true);
+    m_devModeAction->setChecked(!m_safeMode && QSettings().value(QStringLiteral("devMode"), false).toBool());
+    connect(m_devModeAction, &QAction::toggled, this, &MainWindow::setDevMode);
+    m_customiseMenu->addSeparator();
+    auto open = [](const QString &path) { QDesktopServices::openUrl(QUrl::fromLocalFile(path)); };
+    m_devActions << m_customiseMenu->addAction(tr("Open customisation &folder"),
+                                               this, [open] { open(Customization::dir()); })
+                 << m_customiseMenu->addAction(tr("Edit &theme (theme.qss)"),
+                                               this, [open] { open(Customization::themePath()); })
+                 << m_customiseMenu->addAction(tr("Edit &layout (layout.json)"),
+                                               this, [open] { open(Customization::layoutPath()); })
+                 << m_customiseMenu->addAction(tr("&Reload now"), this, &MainWindow::applyCustomization)
+                 << m_customiseMenu->addAction(tr("&Available items…"), this, &MainWindow::showItemList)
+                 << m_customiseMenu->addAction(tr("Reset to &defaults…"), this, &MainWindow::resetCustomization);
+    for (QAction *action : m_devActions)
+        action->setEnabled(m_devModeAction->isChecked());
+    if (m_devModeAction->isChecked())
+        Customization::writeMissingFiles(m_itemHelp);
+
     updateRecentMenu();
+}
+
+void MainWindow::setDevMode(bool on)
+{
+    QSettings().setValue(QStringLiteral("devMode"), on);
+    for (QAction *action : m_devActions)
+        action->setEnabled(on);
+    if (on)
+        Customization::writeMissingFiles(m_itemHelp);
+    m_customization.setWatching(on);
+    applyCustomization();
+    if (on)
+        statusBar()->showMessage(tr("Developer mode is on. Files are in %1")
+                                     .arg(QDir::toNativeSeparators(Customization::dir())), 10000);
+}
+
+void MainWindow::applyCustomization()
+{
+    QStringList problems;
+    QString error;
+    const Layout layout = m_safeMode ? Customization::defaultLayout() : Customization::loadLayout(&error);
+    if (!error.isEmpty())
+        problems << error;
+    applyLayout(layout, &problems);
+    qApp->setStyleSheet(m_safeMode ? QString() : Customization::loadTheme());
+    if (!problems.isEmpty())
+        statusBar()->showMessage(tr("Customisation: %1").arg(problems.join(QStringLiteral("; "))), 15000);
+    else if (m_devModeAction->isChecked())
+        statusBar()->showMessage(tr("Theme and layout loaded."), 3000);
+}
+
+void MainWindow::applyLayout(const Layout &layout, QStringList *problems)
+{
+    // Separators belong to one layout and are thrown away with it.
+    m_toolBar->clear();
+    menuBar()->clear();
+    delete m_layoutObjects;
+    m_layoutObjects = new QObject(this);
+    auto fill = [&](QWidget *target, const QStringList &ids, bool isToolBar) {
+        for (const QString &id : ids) {
+            if (id == QLatin1String("-")) {
+                auto *separator = new QAction(m_layoutObjects);
+                separator->setSeparator(true);
+                target->addAction(separator);
+                continue;
+            }
+            QAction *action = m_items.value(id);
+            const bool wrongPlace = (isToolBar && id == QLatin1String("file.recent"))
+                                    || (!isToolBar && id == QLatin1String("pageNumber"));
+            if (!action || wrongPlace) {
+                problems->append(action ? tr("\"%1\" cannot be used there").arg(id)
+                                        : tr("unknown item \"%1\"").arg(id));
+                continue;
+            }
+            target->addAction(action);
+        }
+    };
+
+    fill(m_toolBar, layout.toolbar, true);
+    m_toolBar->setVisible(!layout.toolbar.isEmpty());
+
+    // Menus made for the previous layout are deleted; the items themselves
+    // belong to the window and are reused.
+    const auto oldMenus = menuBar()->findChildren<QMenu *>(QString(), Qt::FindDirectChildrenOnly);
+    for (QMenu *menu : oldMenus)
+        menu->deleteLater();
+    for (const MenuLayout &m : layout.menus) {
+        auto *menu = new QMenu(m.title, menuBar());
+        fill(menu, m.items, false);
+        menuBar()->addMenu(menu);
+    }
+    menuBar()->addMenu(m_customiseMenu);
+
+    for (auto it = m_defaultShortcuts.begin(); it != m_defaultShortcuts.end(); ++it)
+        m_items.value(it.key())->setShortcut(it.value());
+    for (auto it = layout.shortcuts.begin(); it != layout.shortcuts.end(); ++it) {
+        QAction *action = m_defaultShortcuts.contains(it.key()) ? m_items.value(it.key()) : nullptr;
+        if (!action) {
+            problems->append(tr("shortcut for unknown item \"%1\"").arg(it.key()));
+            continue;
+        }
+        const QKeySequence keys(it.value());
+        if (!it.value().isEmpty() && keys.isEmpty())
+            problems->append(tr("\"%1\" is not a valid shortcut").arg(it.value()));
+        else
+            action->setShortcut(keys);
+    }
+}
+
+void MainWindow::showItemList()
+{
+    QStringList lines;
+    for (const auto &item : m_itemHelp)
+        lines << QStringLiteral("%1 — %2").arg(item.first, item.second);
+    lines << QString() << tr("Use \"-\" for a separator. The same list is in HOW-TO.txt in the customisation folder.");
+    QMessageBox::information(this, tr("Available items"), lines.join(QLatin1Char('\n')));
+}
+
+void MainWindow::resetCustomization()
+{
+    if (QMessageBox::question(this, tr("Reset to defaults"),
+                              tr("Delete your theme.qss and layout.json and go back to the standard "
+                                 "look and layout? This cannot be undone."))
+        != QMessageBox::Yes)
+        return;
+    if (!Customization::removeFiles())
+        QMessageBox::warning(this, tr("Reset to defaults"), tr("The files could not be deleted."));
+    if (m_devModeAction->isChecked())
+        Customization::writeMissingFiles(m_itemHelp);
+    applyCustomization();
 }
 
 void MainWindow::chooseFile()
