@@ -114,6 +114,23 @@ QStringList ProfileLibrary::systemDirs()
     return dirs;
 }
 
+QString ProfileLibrary::systemMonitorProfile()
+{
+#ifdef Q_OS_WIN
+    QString path;
+    if (HDC dc = GetDC(nullptr)) {
+        wchar_t buffer[MAX_PATH];
+        DWORD size = MAX_PATH;
+        if (GetICMProfileW(dc, &size, buffer))
+            path = QDir::fromNativeSeparators(QString::fromWCharArray(buffer));
+        ReleaseDC(nullptr, dc);
+    }
+    return QFile::exists(path) ? path : QString();
+#else
+    return {};
+#endif
+}
+
 bool ProfileLibrary::inspect(const QString &path, ProfileInfo *info, QString *error)
 {
     const QByteArray data = load(path);

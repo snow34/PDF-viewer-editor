@@ -35,5 +35,18 @@ copy_dependencies() {
 }
 while copy_dependencies; do :; done
 
+# Licence texts: the notices file, plus the licence folder of every MSYS2
+# package a bundled DLL came from.
+cp THIRD-PARTY-NOTICES.txt "$out/"
+mkdir -p "$out/licenses"
+find "$out" -name '*.dll' -printf '%f\n' | sort -u | while read -r dll; do
+    [ -e "$MINGW_PREFIX/bin/$dll" ] || continue
+    package=$(pacman -Qqo "$MINGW_PREFIX/bin/$dll" 2>/dev/null || true)
+    name=${package#"$MINGW_PACKAGE_PREFIX"-}
+    if [ -n "$name" ] && [ -d "$MINGW_PREFIX/share/licenses/$name" ] && [ ! -e "$out/licenses/$name" ]; then
+        cp -r "$MINGW_PREFIX/share/licenses/$name" "$out/licenses/$name"
+    fi
+done
+
 echo "Deployed to $out:"
-ls "$out"
+ls "$out" "$out/licenses"

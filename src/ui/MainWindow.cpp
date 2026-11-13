@@ -262,6 +262,20 @@ void MainWindow::buildActions()
         m_itemHelp.append({ std::get<0>(panel), std::get<2>(panel) });
     }
 
+    connect(addItem(QStringLiteral("help.about"), tr("&About Prepress PDF"), tr("Version and licences")),
+            &QAction::triggered, this, [this] {
+                QMessageBox::about(
+                    this, tr("About Prepress PDF"),
+                    tr("<h3>Prepress PDF %1</h3>"
+                       "<p>A PDF viewer for print production.</p>"
+                       "<p>Free software under the GNU Affero General Public License v3. "
+                       "Source code: <a href=\"https://github.com/snow34/PDF-viewer-editor\">"
+                       "github.com/snow34/PDF-viewer-editor</a></p>"
+                       "<p>Built with MuPDF (AGPL), Qt %2 (LGPL) and Little CMS (MIT). "
+                       "See THIRD-PARTY-NOTICES.txt for details.</p>")
+                        .arg(QStringLiteral(APP_VERSION), QString::fromLatin1(qVersion())));
+            });
+
     connect(addItem(QStringLiteral("tools.profiles"), tr("&Colour profiles…"), tr("Manage ICC profiles")),
             &QAction::triggered, this, &MainWindow::showProfiles);
 
@@ -764,7 +778,11 @@ engine::CompositeOptions MainWindow::compositeOptions() const
         o.simulationProfile = m_info.outputIntentProfile;
     else if (!choice.isEmpty())
         o.simulationProfile = engine::ProfileLibrary::load(choice);
-    const QString monitor = QSettings().value(QStringLiteral("monitorProfile")).toString();
+    // No choice saved means automatic: the screen's own profile if the
+    // system reports one, sRGB otherwise.
+    QString monitor = QSettings().value(QStringLiteral("monitorProfile")).toString();
+    if (monitor.isEmpty())
+        monitor = engine::ProfileLibrary::systemMonitorProfile();
     if (!monitor.isEmpty())
         o.monitorProfile = engine::ProfileLibrary::load(monitor);
     o.intent = m_panel->intent();

@@ -233,7 +233,7 @@ private slots:
 
     void defaultLayout()
     {
-        QCOMPARE(menuTitles(), QStringList({ "File", "Edit", "View", "Tools", "Window", "Customise" }));
+        QCOMPARE(menuTitles(), QStringList({ "File", "Edit", "View", "Tools", "Window", "Help", "Customise" }));
         QCOMPARE(toolbarTexts().first(), QStringLiteral("Open…"));
         QVERIFY(qApp->styleSheet().isEmpty());
         QVERIFY(!QFile::exists(configDir.filePath("layout.json"))); // nothing written until dev mode
@@ -248,7 +248,7 @@ private slots:
         QVERIFY(guide.open(QIODevice::ReadOnly));
         QVERIFY(guide.readAll().contains("view.zoomIn"));
         // The generated files reproduce the standard layout exactly.
-        QCOMPARE(menuTitles(), QStringList({ "File", "Edit", "View", "Tools", "Window", "Customise" }));
+        QCOMPARE(menuTitles(), QStringList({ "File", "Edit", "View", "Tools", "Window", "Help", "Customise" }));
     }
 
     void editingLayoutUpdatesTheRunningApp()
@@ -267,7 +267,7 @@ private slots:
     void brokenLayoutFallsBackToDefault()
     {
         writeFile("layout.json", "{ \"toolbar\": [ \n oops");
-        QTRY_COMPARE(menuTitles(), QStringList({ "File", "Edit", "View", "Tools", "Window", "Customise" }));
+        QTRY_COMPARE(menuTitles(), QStringList({ "File", "Edit", "View", "Tools", "Window", "Help", "Customise" }));
         QVERIFY(window->statusBar()->currentMessage().contains("layout.json, line 2"));
     }
 
@@ -291,7 +291,7 @@ private slots:
         QStringList titles;
         for (QAction *a : safe.menuBar()->actions())
             titles << a->text().remove(QLatin1Char('&'));
-        QCOMPARE(titles, QStringList({ "File", "Edit", "View", "Tools", "Window", "Customise" }));
+        QCOMPARE(titles, QStringList({ "File", "Edit", "View", "Tools", "Window", "Help", "Customise" }));
         QVERIFY(qApp->styleSheet().isEmpty());
     }
 

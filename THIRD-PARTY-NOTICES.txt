@@ -1,0 +1,24 @@
+Prepress PDF uses the following software. Prepress PDF itself is licensed
+under the GNU Affero General Public License version 3 (see LICENSE).
+
+MuPDF          PDF rendering        GNU AGPL v3 or later     https://mupdf.com
+Qt 6           User interface       GNU LGPL v3 / GPL        https://www.qt.io
+Little CMS 2   Colour management    MIT                      https://www.littlecms.com
+
+MuPDF itself includes or uses: FreeType (FreeType License), HarfBuzz (MIT),
+OpenJPEG (BSD 2-clause), jbig2dec (AGPL v3), libjpeg-turbo (IJG / BSD),
+zlib (zlib), gumbo-parser (Apache 2.0), brotli (MIT), MuJS (ISC), and a
+thread-safe fork of Little CMS (MIT).
+
+Qt is used under the LGPL: it is linked as separate libraries (DLLs on
+Windows) which you may replace with your own build. Qt source code is
+available from https://download.qt.io.
+
+The Windows installer also contains the runtime libraries these depend on,
+taken unmodified from the MSYS2 distribution (https://www.msys2.org). The
+licence text of every bundled library is in the "licenses" folder next to the
+program, and the exact source for each is available from
+https://packages.msys2.org.
+
+The complete source code of Prepress PDF is at
+https://github.com/snow34/PDF-viewer-editor

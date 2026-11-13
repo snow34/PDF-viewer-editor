@@ -4,6 +4,7 @@ project(PrepressPdf VERSION 0.2.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTORCC ON)
 
 find_package(Qt6 6.4 REQUIRED COMPONENTS Widgets Test)
 find_package(PkgConfig REQUIRED)
@@ -42,7 +43,7 @@ add_library(engine STATIC
 target_include_directories(engine PUBLIC src)
 target_link_libraries(engine PUBLIC Qt6::Gui PRIVATE mupdf PkgConfig::LCMS2)
 if(WIN32)
-    target_link_libraries(engine PRIVATE mscms)
+    target_link_libraries(engine PRIVATE mscms gdi32 user32)
 endif()
 
 add_library(ui STATIC
@@ -54,10 +55,13 @@ add_library(ui STATIC
     src/ui/RenderWorker.cpp src/ui/RenderWorker.h
 )
 target_link_libraries(ui PUBLIC engine Qt6::Widgets)
+target_compile_definitions(ui PUBLIC APP_VERSION="${PROJECT_VERSION}")
 
-add_executable(prepresspdf WIN32 MACOSX_BUNDLE src/main.cpp)
+add_executable(prepresspdf WIN32 MACOSX_BUNDLE src/main.cpp resources/app.qrc)
+if(WIN32)
+    target_sources(prepresspdf PRIVATE packaging/windows/app.rc) # icon of the .exe file
+endif()
 target_link_libraries(prepresspdf PRIVATE ui)
-target_compile_definitions(prepresspdf PRIVATE APP_VERSION="${PROJECT_VERSION}")
 
 enable_testing()
 add_executable(test_engine tests/test_engine.cpp)

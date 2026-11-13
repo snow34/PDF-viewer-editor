@@ -33,6 +33,11 @@ public:
     // Profiles in the app library first, then system profiles.
     QList<ProfileInfo> list() const;
 
+    // Path of the profile the operating system has assigned to the main
+    // screen, or an empty string when none is assigned or the platform is
+    // not supported (currently only Windows is).
+    static QString systemMonitorProfile();
+
     static bool inspect(const QString &path, ProfileInfo *info, QString *error);
     static QByteArray load(const QString &path);
 

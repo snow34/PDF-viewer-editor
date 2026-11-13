@@ -25,7 +25,8 @@ const char kDefaultLayout[] = R"({
                                   "view.rotateLeft", "view.rotateRight", "-",
                                   "view.previousPage", "view.nextPage"] },
     { "title": "&Tools", "items": ["tools.profiles"] },
-    { "title": "&Window", "items": ["window.outputPreview", "window.thumbnails", "window.inspector"] }
+    { "title": "&Window", "items": ["window.outputPreview", "window.thumbnails", "window.inspector"] },
+    { "title": "&Help", "items": ["help.about"] }
   ],
   "shortcuts": {
   }

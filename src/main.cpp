@@ -2,6 +2,7 @@
 
 #include <QApplication>
 #include <QCommandLineParser>
+#include <QIcon>
 
 int main(int argc, char **argv)
 {
@@ -10,6 +11,8 @@ int main(int argc, char **argv)
     QApplication::setApplicationName(QStringLiteral("PrepressPdf"));
     QApplication::setApplicationDisplayName(QStringLiteral("Prepress PDF"));
     QApplication::setApplicationVersion(QStringLiteral(APP_VERSION));
+
+    QApplication::setWindowIcon(QIcon(QStringLiteral(":/app.png")));
 
     QCommandLineParser parser;
     parser.addHelpOption();

@@ -63,7 +63,12 @@ void ProfileDialog::reload()
     const QString monitor = QSettings().value(QStringLiteral("monitorProfile")).toString();
     m_list->clear();
     m_monitor->clear();
-    m_monitor->addItem(tr("sRGB (default)"), QString());
+    engine::ProfileInfo detected;
+    const QString systemProfile = engine::ProfileLibrary::systemMonitorProfile();
+    if (!systemProfile.isEmpty() && engine::ProfileLibrary::inspect(systemProfile, &detected, nullptr))
+        m_monitor->addItem(tr("Automatic (%1)").arg(detected.description), QString());
+    else
+        m_monitor->addItem(tr("Automatic (sRGB, no screen profile found)"), QString());
     for (const engine::ProfileInfo &p : m_library->list()) {
         auto *item = new QTreeWidgetItem(
             m_list, { p.description, p.colorSpace, p.deviceClass,
