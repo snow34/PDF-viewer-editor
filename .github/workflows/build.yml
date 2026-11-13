@@ -1,0 +1,19 @@
+name: build
+on: [push, pull_request]
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake g++ qt6-base-dev libmupdf-dev liblcms2-dev \
+            libharfbuzz-dev libopenjp2-7-dev libjbig2dec0-dev libmujs-dev libgumbo-dev \
+            libfreetype-dev libjpeg-dev zlib1g-dev
+      - name: Build
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
