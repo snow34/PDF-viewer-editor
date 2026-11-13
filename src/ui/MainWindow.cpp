@@ -13,6 +13,7 @@
 #include <QLabel>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QScreen>
 #include <QScrollBar>
 #include <QSettings>
 #include <QSpinBox>
@@ -40,10 +41,16 @@ MainWindow::MainWindow()
     setCentralWidget(m_view);
 
     m_panel = new OutputPreviewPanel;
-    auto *dock = new QDockWidget(tr("Output Preview"));
-    dock->setObjectName(QStringLiteral("outputPreview"));
-    dock->setWidget(m_panel);
-    addDockWidget(Qt::RightDockWidgetArea, dock);
+    // Output Preview is its own window that floats above the main window and
+    // can be dragged anywhere, including onto another screen.
+    m_previewWindow = new QDockWidget(tr("Output Preview"), this);
+    m_previewWindow->setObjectName(QStringLiteral("outputPreview"));
+    m_previewWindow->setWidget(m_panel);
+    m_previewWindow->setAllowedAreas(Qt::NoDockWidgetArea);
+    m_previewWindow->setFeatures(QDockWidget::DockWidgetClosable | QDockWidget::DockWidgetMovable
+                                 | QDockWidget::DockWidgetFloatable);
+    addDockWidget(Qt::RightDockWidgetArea, m_previewWindow);
+    m_previewWindow->setFloating(true);
 
     m_banner = new QLabel;
     m_sizeLabel = new QLabel;
@@ -53,7 +60,9 @@ MainWindow::MainWindow()
     statusBar()->addPermanentWidget(m_zoomLabel);
 
     buildActions();
-    menuBar()->addMenu(tr("&Window"))->addAction(dock->toggleViewAction());
+    QAction *togglePreview = m_previewWindow->toggleViewAction();
+    togglePreview->setShortcut(QKeySequence(tr("Ctrl+Shift+Y")));
+    menuBar()->addMenu(tr("&Window"))->addAction(togglePreview);
 
     m_worker = new RenderWorker;
     m_worker->moveToThread(&m_thread);
@@ -263,6 +272,10 @@ void MainWindow::onRendered(const engine::PageRender &render, int requestId)
         m_screenshot.clear();
         QTimer::singleShot(200, this, [this, file] {
             grab().save(file);
+            // The Output Preview window is saved next to it as <name>-preview.png.
+            QString preview = file;
+            preview.insert(preview.lastIndexOf(QLatin1Char('.')), QStringLiteral("-preview"));
+            m_previewWindow->grab().save(preview);
             qApp->quit();
         });
     }
@@ -366,6 +379,35 @@ void MainWindow::showProfiles()
     ProfileDialog dialog(&m_library, this);
     dialog.exec();
     refreshProfiles();
+}
+
+void MainWindow::showEvent(QShowEvent *event)
+{
+    QMainWindow::showEvent(event);
+    if (m_previewPlaced)
+        return;
+    m_previewPlaced = true;
+    QSettings settings;
+    const QRect saved = settings.value(QStringLiteral("outputPreviewGeometry")).toRect();
+    bool onScreen = false;
+    for (QScreen *screen : QGuiApplication::screens())
+        onScreen = onScreen || screen->availableGeometry().intersects(saved);
+    if (saved.isValid() && onScreen) {
+        m_previewWindow->setGeometry(saved);
+    } else {
+        // First start: over the right-hand side of the main window.
+        m_previewWindow->resize(340, 520);
+        m_previewWindow->move(geometry().topRight() + QPoint(-380, 90));
+    }
+    m_previewWindow->setVisible(settings.value(QStringLiteral("outputPreviewVisible"), true).toBool());
+}
+
+void MainWindow::closeEvent(QCloseEvent *event)
+{
+    QSettings settings;
+    settings.setValue(QStringLiteral("outputPreviewGeometry"), m_previewWindow->geometry());
+    settings.setValue(QStringLiteral("outputPreviewVisible"), m_previewWindow->isVisible());
+    QMainWindow::closeEvent(event);
 }
 
 void MainWindow::resizeEvent(QResizeEvent *event)

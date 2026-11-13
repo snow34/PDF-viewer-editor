@@ -18,7 +18,7 @@ It is open source (AGPL-3.0) and built with C++, Qt 6 and MuPDF.
 | Open a PDF | **File > Open**, or drag the file onto the window. Recent files are under **File > Open recent**. |
 | Move between pages | **Previous page** / **Next page** in the toolbar, Page Up / Page Down, or type a page number. |
 | Zoom | **Zoom in** / **Zoom out**, or hold Ctrl and scroll. **Fit page** shows the whole page. |
-| See which inks a page uses | Look at the **Separation** list in the Output Preview panel on the right. Cyan, Magenta, Yellow, Black and every spot colour are listed. |
+| See which inks a page uses | Look at the **Separation** list in the **Output Preview** window. Cyan, Magenta, Yellow, Black and every spot colour are listed. |
 | Look at one plate alone | Untick every ink except the one you want. A single plate is shown in grey: darker means more ink. |
 | Hide a plate | Untick it in the list. |
 | Read the ink percentage at a spot | Move the mouse over the page. The **Ink** column shows the percentage for each ink, and **Total area coverage** shows their sum. |
@@ -29,6 +29,13 @@ It is open source (AGPL-3.0) and built with C++, Qt 6 and MuPDF.
 | See trim and bleed | Tick **Show page boxes**. Trim is green, bleed is blue, art is red. The trim size in mm is shown bottom right. |
 | Check whether a file says it is PDF/X | Look at the bottom left of the window, or open **File > Properties**. |
 
+### The Output Preview window
+
+Output Preview is a separate window that floats above the main window. Drag
+it by its title bar to wherever you like, including a second screen; the app
+remembers where you left it. Close it with its ✕ and bring it back with
+**Window > Output Preview** (Ctrl+Shift+Y).
+
 ### Good to know
 
 - The ink percentages are always the real numbers in your file. Choosing a
@@ -37,7 +44,7 @@ It is open source (AGPL-3.0) and built with C++, Qt 6 and MuPDF.
 - "Claims PDF/X-4 (not verified)" means the file says it is PDF/X-4. The app
   does not check yet whether that is true.
 - If no CMYK profile is selected, colours on screen are only approximate and
-  the panel says so. Ink percentages are still correct.
+  the Output Preview window says so. Ink percentages are still correct.
 
 ## How to add ICC profiles
 

@@ -41,7 +41,11 @@ std::unique_ptr<Document> Document::open(const QString &path, QString *error)
         return nullptr;
     }
     fz_context *ctx = d->m_ctx;
+#ifdef Q_OS_WIN
+    const QByteArray file = path.toUtf8(); // MuPDF takes UTF-8 paths on Windows
+#else
     const QByteArray file = QFile::encodeName(path);
+#endif
     char message[256] = "";
     fz_try(ctx)
     {

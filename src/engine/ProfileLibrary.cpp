@@ -10,6 +10,9 @@
 #include <lcms2.h>
 
 #ifdef Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #include <icm.h>
 #endif

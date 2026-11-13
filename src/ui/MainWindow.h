@@ -8,6 +8,7 @@
 
 class OutputPreviewPanel;
 class PageView;
+class QDockWidget;
 class RenderWorker;
 class QLabel;
 class QMenu;
@@ -29,6 +30,8 @@ signals:
 
 protected:
     void resizeEvent(QResizeEvent *event) override;
+    void showEvent(QShowEvent *event) override;
+    void closeEvent(QCloseEvent *event) override;
 
 private:
     void buildActions();
@@ -51,6 +54,8 @@ private:
     RenderWorker *m_worker;
     PageView *m_view;
     OutputPreviewPanel *m_panel;
+    QDockWidget *m_previewWindow;
+    bool m_previewPlaced = false;
     engine::ProfileLibrary m_library;
 
     engine::DocumentInfo m_info;

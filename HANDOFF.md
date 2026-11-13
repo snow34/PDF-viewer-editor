@@ -81,7 +81,9 @@ src/ui/
   RenderWorker       owns the Document on a worker thread; all MuPDF calls happen there
   MainWindow         glue: requests renders, recomposites, menus, status bar
   PageView           scroll area + PageCanvas (image, box overlays, hover)
-  OutputPreviewPanel profile, plates, ink readout, coverage
+  OutputPreviewPanel profile, plates, ink readout, coverage. Shown in a floating,
+                     non-dockable QDockWidget ("outputPreview") owned by MainWindow:
+                     the owner wants it as a separate draggable window
   ProfileDialog      profile management
 tests/
   test_engine.cpp    ink values, overprint/knockout, boxes, PDF/X detection, profiles
@@ -122,7 +124,7 @@ separations). Both are deliberate; the owner has been told.
   `MainWindow::m_requestId`).
 - Rendered size is capped at 60 megapixels (`kMaxPixels` in `MainWindow.cpp`).
 - QSettings keys: `recentFiles`, `simulationProfile`, `monitorProfile`,
-  `coverageLimit`, `showBoxes`.
+  `coverageLimit`, `showBoxes`, `outputPreviewGeometry`, `outputPreviewVisible`.
 - `pdfx1a_marked.pdf` and `pdfx4_marked.pdf` only carry the markers; they are
   not compliant files. Real conformance tests need the Ghent Output Suite and
   Altona Test Suite (not downloaded; check their licences before committing).

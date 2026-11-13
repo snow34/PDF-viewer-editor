@@ -4,6 +4,7 @@
 #include "ui/PageView.h"
 
 #include <QCheckBox>
+#include <QDockWidget>
 #include <QLabel>
 #include <QStandardPaths>
 #include <QTreeWidget>
@@ -79,6 +80,21 @@ private slots:
         if (qEnvironmentVariableIsSet("UI_SCREENSHOT"))
             window->grab().save(qEnvironmentVariable("UI_SCREENSHOT"));
         box->setChecked(false);
+    }
+
+    void outputPreviewIsASeparateWindow()
+    {
+        auto *preview = window->findChild<QDockWidget *>(QStringLiteral("outputPreview"));
+        QVERIFY(preview);
+        QVERIFY(preview->isWindow()); // its own top-level window, not part of the main one
+        QVERIFY(preview->isVisible());
+        QVERIFY(preview->isAncestorOf(inks));
+        const QPoint target = preview->pos() + QPoint(120, 60);
+        preview->move(target);
+        QTRY_COMPARE(preview->pos(), target);
+        QVERIFY(preview->isWindow()); // moving it never docks it
+        if (qEnvironmentVariableIsSet("UI_SCREENSHOT"))
+            preview->grab().save(qEnvironmentVariable("UI_SCREENSHOT") + ".preview.png");
     }
 
     void cleanupTestCase() { delete window; }
