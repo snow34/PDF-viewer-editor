@@ -36,8 +36,11 @@ Phase 1 (viewer + output preview) is partly done. Phases 2-4 are not started.
 CI (`.github/workflows/build.yml`) builds and tests both on every push. The
 Windows job also builds the NSIS installer, installs it silently, starts the
 installed app with a bare PATH on a test PDF and uploads the installer as the
-`windows-installer` artifact. Pushing a tag `v*` publishes it as a GitHub
-release; that step has never run.
+`windows-installer` artifact. To publish a release, start the workflow by hand
+with "release" ticked (`gh workflow run build.yml --ref main -f release=true`):
+it creates tag `v<CMake version>` and a GitHub release with the installer.
+Bump the version in `CMakeLists.txt` first; an existing tag makes it fail.
+Tag pushes also publish, but the Claude cloud sandbox cannot push tags (403).
 
 ### Done
 

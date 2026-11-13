@@ -5,6 +5,11 @@ on:
     tags: ['v*']
   pull_request:
   workflow_dispatch: # "Run workflow" button on the Actions page
+    inputs:
+      release:
+        description: Publish the Windows installer as release v<version>
+        type: boolean
+        default: false
 jobs:
   linux:
     runs-on: ubuntu-24.04
@@ -81,9 +86,15 @@ jobs:
           name: windows-screenshots
           path: windows-screenshot*.png
           if-no-files-found: ignore
+      # Runs for a pushed tag v*, or for a manual run with "release" ticked.
+      # The manual run creates the tag itself, named after the CMake version.
       - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release)
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create $env:GITHUB_REF_NAME (Get-ChildItem PrepressPDF-*-setup.exe).FullName --title "Prepress PDF $env:GITHUB_REF_NAME" --generate-notes
+        run: |
+          $installer = (Get-ChildItem PrepressPDF-*-setup.exe)
+          $tag = 'v' + ($installer.Name -replace '^PrepressPDF-(.*)-setup\.exe$', '$1')
+          gh release create $tag $installer.FullName --target $env:GITHUB_SHA --title "Prepress PDF $tag" --generate-notes
+          if ($LASTEXITCODE -ne 0) { throw "Could not publish release $tag" }
