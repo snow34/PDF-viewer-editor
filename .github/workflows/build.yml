@@ -4,6 +4,7 @@ on:
     branches: ['**']
     tags: ['v*']
   pull_request:
+  workflow_dispatch: # "Run workflow" button on the Actions page
 jobs:
   linux:
     runs-on: ubuntu-24.04
