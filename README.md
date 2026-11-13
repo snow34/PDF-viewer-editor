@@ -9,7 +9,8 @@ It is open source (AGPL-3.0) and built with C++, Qt 6 and MuPDF.
 
 > **Status:** early version. Viewing and Output Preview work. Checking files
 > against the PDF/X standard and editing are planned but not built yet.
-> Only Linux has been built and tested so far.
+> Available for Windows (installer) and Linux (build it yourself). No macOS
+> version yet.
 
 ## What you can do with it
 
@@ -65,7 +66,25 @@ In the same window you can also:
 No press profiles are included with the app. Free ones (for example the
 FOGRA/PSO profiles) can be downloaded from eci.org and imported.
 
-## How to install (Ubuntu 24.04)
+## How to install on Windows
+
+1. Download `PrepressPDF-…-setup.exe`. Until there is a Releases page, it is
+   under **Actions** on GitHub: open the newest run with a green tick, scroll
+   to **Artifacts** and download **windows-installer** (you must be signed in
+   to GitHub). Unzip it.
+2. Double-click the setup file. Windows may show "Windows protected your PC"
+   because the installer is not digitally signed: click **More info**, then
+   **Run anyway**.
+3. Follow the steps. The app is installed in `C:\Program Files\Prepress PDF`
+   and appears in the Start menu as **Prepress PDF**.
+
+To remove it, use **Settings > Apps > Installed apps** in Windows.
+
+The installer does not make the app your default PDF program. To open a PDF
+with it, start the app and use **File > Open**, or right-click a PDF and
+choose **Open with**.
+
+## How to install on Linux (Ubuntu 24.04)
 
 There is no installer yet; you build the app yourself. Run these three
 commands in a terminal, in the project folder.
@@ -88,9 +107,7 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
 ./build/prepresspdf tests/data/ink_patches.pdf
 ```
 
-Windows and macOS builds are not available yet.
-
-## How to check that it works
+## How to check that it works (Linux)
 
 ```bash
 ctest --test-dir build --output-on-failure
@@ -102,7 +119,7 @@ them correctly.
 ## What is planned
 
 1. **Rest of the viewer:** thumbnails, continuous scrolling, search, rotate,
-   object inspector, Windows and macOS builds.
+   object inspector, a macOS version.
 2. **Preflight:** check files against PDF/X-1a, X-3 and X-4, list the
    problems, and fix them (convert colours, embed fonts, set page boxes,
    set the output intent).

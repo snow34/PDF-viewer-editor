@@ -26,9 +26,18 @@ The owner prefers to be asked clarifying questions rather than have things assum
 ## State
 
 Phase 1 (viewer + output preview) is partly done. Phases 2-4 are not started.
-Built and tested on Ubuntu 24.04 only (Qt 6.4.2, MuPDF 1.23.10, lcms2 2.14).
-The GitHub Actions workflow has never run. Windows/macOS code paths
-(`InstallColorProfileW`, ColorSync folders) have never been compiled.
+
+| Platform | How it is built | Versions seen in CI |
+|---|---|---|
+| Linux (Ubuntu 24.04) | system packages, static MuPDF | Qt 6.4.2, MuPDF 1.23.10, lcms2 2.14 |
+| Windows | MSYS2 UCRT64 (MinGW gcc), MuPDF as DLL | Qt 6.12.0, MuPDF 1.28.5 |
+| macOS | not built; ColorSync paths never compiled | - |
+
+CI (`.github/workflows/build.yml`) builds and tests both on every push. The
+Windows job also builds the NSIS installer, installs it silently, starts the
+installed app with a bare PATH on a test PDF and uploads the installer as the
+`windows-installer` artifact. Pushing a tag `v*` publishes it as a GitHub
+release; that step has never run.
 
 ### Done
 
@@ -48,8 +57,9 @@ The GitHub Actions workflow has never run. Windows/macOS code paths
 Thumbnails, continuous scrolling, search, rotate, object inspector, crop and
 media box overlays, black-ink simulation, automatic monitor profile detection,
 bundled press profiles (licence must be confirmed per profile), tile cache and
-thread pool for very large sheets, HiDPI rendering, Windows and macOS builds,
-vendored pinned MuPDF.
+thread pool for very large sheets, HiDPI rendering, macOS build, pinned MuPDF
+version shared by all platforms. On Windows `InstallColorProfileW` compiles but
+has never been exercised.
 
 ## Build and test
 
@@ -68,6 +78,27 @@ UI_SCREENSHOT=out.png QT_QPA_PLATFORM=offscreen ./build/test_ui
 ```
 
 Regenerate test PDFs with `python3 tests/data/make_test_pdf.py tests/data`.
+
+## Windows packaging
+
+- `packaging/windows/deploy.sh` (MSYS2 shell): copies the exe, runs
+  `windeployqt6`, then copies every non-Qt DLL found with `ldd` until nothing
+  new appears.
+- `packaging/windows/installer.nsi`: per-machine install to Program Files,
+  Start menu shortcut, uninstaller, Add/Remove Programs entry. No file
+  association on purpose.
+- Why MSYS2 and not MSVC/vcpkg: the vcpkg `libmupdf` port is built with
+  `FZ_ENABLE_ICC=0`, which is useless for colour-managed rendering. MSYS2's
+  `libmupdf` is built from the full source with ICC.
+- MSYS2 is a rolling distribution, so Qt and MuPDF versions on Windows are
+  **not pinned** and differ from Linux. A MuPDF API change can break the
+  Windows build without any change in this repo.
+- Open: installer is unsigned (SmartScreen warning), no app icon, no
+  third-party licence notices file in the installer (Qt is LGPL, MuPDF AGPL;
+  only this project's LICENSE is included), version is read from
+  `project(... VERSION ...)` in `CMakeLists.txt`.
+- CI artifacts cannot be downloaded from the Claude cloud sandbox (blob host
+  blocked), so the Windows screenshot artifact has never been looked at.
 
 ## Architecture
 
@@ -134,7 +165,7 @@ separations). Both are deliberate; the owner has been told.
 ## Next steps, in order
 
 1. Finish phase 1 (list above). Suggested first: thumbnails, object inspector,
-   vendored MuPDF + Windows/macOS CI.
+   pinned MuPDF, macOS CI.
 2. Phase 2 — `src/preflight/`: rule engine, one check per ISO clause, profiles
    for PDF/X-1a:2001/2003, X-3:2002/2003, X-4; report panel with jump-to-object;
    fix-ups with before/after preview (output intent, RGB/Lab -> CMYK, spot
