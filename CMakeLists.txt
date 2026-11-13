@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(PrepressPdf VERSION 0.1.0 LANGUAGES C CXX)
+project(PrepressPdf VERSION 0.2.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -57,6 +57,7 @@ target_link_libraries(ui PUBLIC engine Qt6::Widgets)
 
 add_executable(prepresspdf WIN32 MACOSX_BUNDLE src/main.cpp)
 target_link_libraries(prepresspdf PRIVATE ui)
+target_compile_definitions(prepresspdf PRIVATE APP_VERSION="${PROJECT_VERSION}")
 
 enable_testing()
 add_executable(test_engine tests/test_engine.cpp)

@@ -9,7 +9,7 @@ int main(int argc, char **argv)
     QApplication::setOrganizationName(QStringLiteral("PrepressPdf"));
     QApplication::setApplicationName(QStringLiteral("PrepressPdf"));
     QApplication::setApplicationDisplayName(QStringLiteral("Prepress PDF"));
-    QApplication::setApplicationVersion(QStringLiteral("0.1.0"));
+    QApplication::setApplicationVersion(QStringLiteral(APP_VERSION));
 
     QCommandLineParser parser;
     parser.addHelpOption();
