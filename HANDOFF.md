@@ -49,6 +49,14 @@ Tag pushes also publish, but the Claude cloud sandbox cannot push tags (403).
 - Separations list with per-plate show/hide; single plate shown as grey.
 - Ink % under cursor, total area coverage, 1/3x3/5x5 sampling.
 - Coverage highlight above a limit.
+- Pages panel with thumbnails (requested one at a time so they never queue
+  ahead of the page being viewed).
+- Object Inspector: click a point, list objects under it (bounding-box test,
+  clipping ignored) with colour space, values, overprint, opacity, font,
+  image pixels and effective ppi.
+- Text search across pages with highlights; view rotation (0/90/180/270).
+- App icon, About dialog, third-party notices; monitor profile auto-detected
+  on Windows (`GetICMProfileW`, main screen only).
 - Developer mode: editable theme and layout with live reload.
 - Windows installer, published as GitHub release v0.1.0.
 - Output Preview as a separate floating window.
@@ -60,12 +68,18 @@ Tag pushes also publish, but the Claude cloud sandbox cannot push tags (403).
 
 ### Phase 1 still open
 
-Thumbnails, continuous scrolling, search, rotate, object inspector, crop and
-media box overlays, black-ink simulation, automatic monitor profile detection,
-bundled press profiles (licence must be confirmed per profile), tile cache and
-thread pool for very large sheets, HiDPI rendering, macOS build, pinned MuPDF
-version shared by all platforms. On Windows `InstallColorProfileW` compiles but
-has never been exercised.
+- **Continuous scrolling and large-sheet rendering.** These are one redesign:
+  `PageView` shows exactly one fully rendered page (`MainWindow::m_render`),
+  and ink readout, the inspector overlay and search highlights all assume
+  that. Continuous scrolling needs a multi-page layout with a render per
+  visible page; large sheets need rendering only the visible region instead
+  of the whole page (today capped at 60 megapixels by `kMaxPixels`).
+- Crop and media box overlays, black-ink simulation, HiDPI rendering.
+- Monitor profile detection on Linux and macOS; per-screen profiles.
+- Bundled press profiles (licence must be confirmed per profile).
+- Dock layout and main window geometry are not saved between sessions.
+- macOS build; a MuPDF version pinned and shared by all platforms.
+- Object inspector: honour clipping; real point-in-path test.
 
 ## Build and test
 
@@ -99,9 +113,11 @@ Regenerate test PDFs with `python3 tests/data/make_test_pdf.py tests/data`.
 - MSYS2 is a rolling distribution, so Qt and MuPDF versions on Windows are
   **not pinned** and differ from Linux. A MuPDF API change can break the
   Windows build without any change in this repo.
-- Open: installer is unsigned (SmartScreen warning), no app icon, no
-  third-party licence notices file in the installer (Qt is LGPL, MuPDF AGPL;
-  only this project's LICENSE is included), version is read from
+- The installer includes `THIRD-PARTY-NOTICES.txt` and a `licenses` folder
+  filled by `deploy.sh` from the MSYS2 package each bundled DLL belongs to.
+- Icon: `resources/make_icon.py` writes `resources/app.png` (window icon via
+  `app.qrc`) and `packaging/windows/app.ico` (exe via `app.rc`, installer).
+- Open: installer is unsigned (SmartScreen warning). The version is read from
   `project(... VERSION ...)` in `CMakeLists.txt`.
 - CI artifacts cannot be downloaded from the Claude cloud sandbox (blob host
   blocked), so the Windows screenshot artifact has never been looked at.
@@ -116,6 +132,7 @@ src/engine/   no widgets; QtGui types only
   ProfileLibrary     ICC profile folders, import/remove/system install (lcms2)
 src/ui/
   RenderWorker       owns the Document on a worker thread; all MuPDF calls happen there
+                     (page renders, thumbnails, search, object inspection)
   MainWindow         glue: requests renders, recomposites, menus, status bar
   PageView           scroll area + PageCanvas (image, box overlays, hover)
   OutputPreviewPanel profile, plates, ink readout, coverage. Shown in a floating,
@@ -171,6 +188,14 @@ Scripting and a debug inspector were offered and not chosen.
 - Not customisable yet: Output Preview contents, page box overlay colours
   (hard-coded in `PageCanvas::paintEvent`), toolbar icons (text only).
 
+## Coordinates and rotation
+
+Everything the UI receives from the engine (page boxes, search rectangles,
+inspector bounds) is in **view points**: 1/72 inch, origin top-left of the
+rendered area, y down, view rotation already applied (`viewMatrix` in
+`Document.cpp`). Pixel = view point x zoom. The UI passes view points back
+(`objectsAt`). Never mix in raw PDF coordinates on the UI side.
+
 ## Gotchas
 
 - **`fz_try` / `fz_catch` are setjmp/longjmp.** Do not construct C++ objects
@@ -198,8 +223,8 @@ Scripting and a debug inspector were offered and not chosen.
 
 ## Next steps, in order
 
-1. Finish phase 1 (list above). Suggested first: thumbnails, object inspector,
-   pinned MuPDF, macOS CI.
+1. Finish phase 1 (list above). Suggested first: the continuous-scroll /
+   visible-region rendering redesign.
 2. Phase 2 — `src/preflight/`: rule engine, one check per ISO clause, profiles
    for PDF/X-1a:2001/2003, X-3:2002/2003, X-4; report panel with jump-to-object;
    fix-ups with before/after preview (output intent, RGB/Lab -> CMYK, spot

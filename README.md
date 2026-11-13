@@ -18,7 +18,11 @@ It is open source (AGPL-3.0) and built with C++, Qt 6 and MuPDF.
 |---|---|
 | Open a PDF | **File > Open**, or drag the file onto the window. Recent files are under **File > Open recent**. |
 | Move between pages | **Previous page** / **Next page** in the toolbar, Page Up / Page Down, or type a page number. |
+| Jump to a page | Click its thumbnail in the **Pages** panel on the left. |
 | Zoom | **Zoom in** / **Zoom out**, or hold Ctrl and scroll. **Fit page** shows the whole page. |
+| Turn the page | **Rotate left** / **Rotate right**. This only turns the view; the file is not changed. |
+| Find text | **Edit > Find** (Ctrl+F), type the text and press Enter. Results are highlighted; Enter or **Find next** / **Find previous** moves between them, across all pages. |
+| See what an object is made of | Click it on the page. The **Object Inspector** on the right lists everything under that point, topmost first: colour space and colour values, overprint, opacity, the font and size for text, pixel size and resolution (ppi) for images. The top object gets a pink frame. |
 | See which inks a page uses | Look at the **Separation** list in the **Output Preview** window. Cyan, Magenta, Yellow, Black and every spot colour are listed. |
 | Look at one plate alone | Untick every ink except the one you want. A single plate is shown in grey: darker means more ink. |
 | Hide a plate | Untick it in the list. |
@@ -37,6 +41,12 @@ it by its title bar to wherever you like, including a second screen; the app
 remembers where you left it. Close it with its ✕ and bring it back with
 **Window > Output Preview** (Ctrl+Shift+Y).
 
+### Panels
+
+**Pages** and **Object Inspector** are panels at the sides of the window. You
+can close them, bring them back from the **Window** menu, or drag them by
+their title to another side or out into their own window.
+
 ### Good to know
 
 - The ink percentages are always the real numbers in your file. Choosing a
@@ -44,6 +54,10 @@ remembers where you left it. Close it with its ✕ and bring it back with
 - Overprint is always simulated, like Output Preview in Acrobat.
 - "Claims PDF/X-4 (not verified)" means the file says it is PDF/X-4. The app
   does not check yet whether that is true.
+- The Object Inspector goes by each object's bounding box and does not take
+  clipping into account, so it can list an object that is hidden at that spot.
+- "substituted, not embedded" next to a font means the PDF does not contain
+  the font and a stand-in is shown. A printer may reject such a file.
 - If no CMYK profile is selected, colours on screen are only approximate and
   the Output Preview window says so. Ink percentages are still correct.
 
@@ -60,8 +74,9 @@ In the same window you can also:
   that belong to the operating system are never deleted.
 - **Install for other applications** — also copies the profile into your
   system's colour profile folder so other programs can use it.
-- **Monitor profile** — choose the profile of your screen. If you don't, sRGB
-  is used.
+- **Monitor profile** — the profile of your screen. *Automatic* uses the
+  profile Windows has assigned to your main screen; on Linux, or if Windows
+  has none, sRGB is used. You can pick a specific profile instead.
 
 No press profiles are included with the app. Free ones (for example the
 FOGRA/PSO profiles) can be downloaded from eci.org and imported.
@@ -156,8 +171,8 @@ them correctly.
 
 ## What is planned
 
-1. **Rest of the viewer:** thumbnails, continuous scrolling, search, rotate,
-   object inspector, a macOS version.
+1. **Rest of the viewer:** continuous scrolling through all pages, faster
+   display of very large sheets, a macOS version.
 2. **Preflight:** check files against PDF/X-1a, X-3 and X-4, list the
    problems, and fix them (convert colours, embed fonts, set page boxes,
    set the output intent).
