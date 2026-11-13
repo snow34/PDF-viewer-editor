@@ -1,8 +1,10 @@
 #pragma once
 
+#include "Customization.h"
 #include "engine/ProfileLibrary.h"
 #include "engine/Types.h"
 
+#include <QHash>
 #include <QMainWindow>
 #include <QThread>
 
@@ -13,11 +15,14 @@ class RenderWorker;
 class QLabel;
 class QMenu;
 class QSpinBox;
+class QToolBar;
+class QWidgetAction;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
-    MainWindow();
+    // Safe mode ignores the user's theme and layout files.
+    explicit MainWindow(bool safeMode = false);
     ~MainWindow() override;
 
     void openFile(const QString &path);
@@ -35,6 +40,13 @@ protected:
 
 private:
     void buildActions();
+    QAction *addItem(const QString &id, const QString &text, const QString &help,
+                     const QKeySequence &shortcut = {});
+    void applyCustomization();
+    void applyLayout(const Layout &layout, QStringList *problems);
+    void setDevMode(bool on);
+    void showItemList();
+    void resetCustomization();
     void chooseFile();
     void onOpened(const engine::DocumentInfo &info, const QList<QSizeF> &sizes);
     void onRendered(const engine::PageRender &render, int requestId);
@@ -74,4 +86,16 @@ private:
     QLabel *m_sizeLabel;
     QMenu *m_recent;
     QAction *m_fitAction;
+
+    // Everything that can be placed in the toolbar or a menu, by id.
+    QHash<QString, QAction *> m_items;
+    QHash<QString, QKeySequence> m_defaultShortcuts;
+    QList<QPair<QString, QString>> m_itemHelp; // id, description (in creation order)
+    QToolBar *m_toolBar;
+    QObject *m_layoutObjects = nullptr;
+    QMenu *m_customiseMenu;
+    QAction *m_devModeAction;
+    QList<QAction *> m_devActions;
+    Customization m_customization;
+    bool m_safeMode;
 };

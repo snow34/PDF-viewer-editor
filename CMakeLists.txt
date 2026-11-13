@@ -46,6 +46,7 @@ if(WIN32)
 endif()
 
 add_library(ui STATIC
+    src/ui/Customization.cpp src/ui/Customization.h
     src/ui/MainWindow.cpp src/ui/MainWindow.h
     src/ui/PageView.cpp src/ui/PageView.h
     src/ui/OutputPreviewPanel.cpp src/ui/OutputPreviewPanel.h

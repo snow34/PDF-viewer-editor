@@ -49,6 +49,9 @@ Tag pushes also publish, but the Claude cloud sandbox cannot push tags (403).
 - Separations list with per-plate show/hide; single plate shown as grey.
 - Ink % under cursor, total area coverage, 1/3x3/5x5 sampling.
 - Coverage highlight above a limit.
+- Developer mode: editable theme and layout with live reload.
+- Windows installer, published as GitHub release v0.1.0.
+- Output Preview as a separate floating window.
 - ICC: simulation profile (output intent or library profile), monitor profile,
   relative / absolute colorimetric display.
 - Profile library: import, remove, system-wide install.
@@ -119,6 +122,7 @@ src/ui/
                      non-dockable QDockWidget ("outputPreview") owned by MainWindow:
                      the owner wants it as a separate draggable window
   ProfileDialog      profile management
+  Customization      user-editable theme.qss + layout.json, file watcher (see below)
 tests/
   test_engine.cpp    ink values, overprint/knockout, boxes, PDF/X detection, profiles
   test_ui.cpp        drives the real MainWindow
@@ -141,6 +145,32 @@ Consequence: the simulation profile changes appearance only, never ink numbers.
 Overprint cannot be switched off (MuPDF applies it when the target has
 separations). Both are deliberate; the owner has been told.
 
+## Developer mode (GUI customisation)
+
+Owner's request: a way to change how the GUI looks and is laid out without
+programming. Scope agreed: **look/theme** and **layout/menus/shortcuts**.
+Scripting and a debug inspector were offered and not chosen.
+
+- Files live in `Customization::dir()` (AppConfigLocation + `/customise`, or
+  `PREPRESSPDF_CONFIG_DIR`): `theme.qss` (app-wide Qt style sheet),
+  `layout.json` (toolbar, menus, shortcuts), `HOW-TO.txt` (generated guide
+  with all item ids, rewritten whenever dev mode writes files).
+- Every placeable command is registered in `MainWindow::buildActions` via
+  `addItem(id, text, help, shortcut)` into `m_items`. **New commands must be
+  registered there** and added to `kDefaultLayout` in `Customization.cpp`,
+  otherwise they appear nowhere. Special items: `file.recent` (menus only),
+  `pageNumber` (toolbar only), `-` (separator).
+- `MainWindow::applyLayout` rebuilds toolbar and menu bar from a `Layout`;
+  unknown ids and bad shortcuts are reported in the status bar, a JSON syntax
+  error falls back to the default layout.
+- The Customise menu is appended by the app and is not configurable, so the
+  user cannot lock themselves out. `--safe-mode` ignores both files.
+- Files apply whether or not dev mode is on; dev mode adds the editing menu
+  entries and live reload (`QFileSystemWatcher`, 150 ms debounce, re-armed
+  after every change because editors replace files on save).
+- Not customisable yet: Output Preview contents, page box overlay colours
+  (hard-coded in `PageCanvas::paintEvent`), toolbar icons (text only).
+
 ## Gotchas
 
 - **`fz_try` / `fz_catch` are setjmp/longjmp.** Do not construct C++ objects
@@ -158,7 +188,8 @@ separations). Both are deliberate; the owner has been told.
   `MainWindow::m_requestId`).
 - Rendered size is capped at 60 megapixels (`kMaxPixels` in `MainWindow.cpp`).
 - QSettings keys: `recentFiles`, `simulationProfile`, `monitorProfile`,
-  `coverageLimit`, `showBoxes`, `outputPreviewGeometry`, `outputPreviewVisible`.
+  `coverageLimit`, `showBoxes`, `outputPreviewGeometry`, `outputPreviewVisible`,
+  `devMode`.
 - `pdfx1a_marked.pdf` and `pdfx4_marked.pdf` only carry the markers; they are
   not compliant files. Real conformance tests need the Ghent Output Suite and
   Altona Test Suite (not downloaded; check their licences before committing).
