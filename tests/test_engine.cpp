@@ -148,6 +148,77 @@ private slots:
         QVERIFY(cyan.blue() > cyan.red());
     }
 
+    void rotation()
+    {
+        // Patch A (40/30/20/10) is top-left; turned 90 degrees clockwise it is top-right.
+        const PageRender turned = doc->render(0, zoom, 90);
+        QVERIFY(turned.image);
+        QCOMPARE(turned.rotation, 90);
+        compare(inkValues(*turned.image, int(250 * zoom), int(50 * zoom), 3), { 40, 30, 20, 10, 0 });
+        QCOMPARE(turned.boxes.trim, QRectF(10, 10, 280, 280));
+        // Upside down it is bottom-right.
+        const PageRender flipped = doc->render(0, zoom, 180);
+        compare(inkValues(*flipped.image, int((300 - 50) * zoom), int(250 * zoom), 3), { 40, 30, 20, 10, 0 });
+    }
+
+    void search()
+    {
+        QString error;
+        auto objects = Document::open(QStringLiteral(TEST_DATA_DIR "/objects.pdf"), &error);
+        QVERIFY2(objects, qPrintable(error));
+        const QList<SearchHit> hits = objects->search(0, QStringLiteral("prepress"));
+        QCOMPARE(hits.size(), 1);
+        QCOMPARE(hits.first().page, 0);
+        const QRectF r = hits.first().rects.first();
+        // "Prepress" starts after "Hello " on the baseline y = 300 - 250 = 50.
+        QVERIFY2(r.left() > 55 && r.right() < 120 && r.top() < 50 && r.bottom() > 44,
+                 qPrintable(QStringLiteral("%1 %2 %3 %4").arg(r.left()).arg(r.top()).arg(r.right()).arg(r.bottom())));
+        QVERIFY(objects->search(0, QStringLiteral("absent")).isEmpty());
+        // Turned 90 degrees the hit becomes tall and narrow.
+        const QRectF turned = objects->search(0, QStringLiteral("prepress"), 90).first().rects.first();
+        QVERIFY(turned.height() > turned.width());
+    }
+
+    void objectInspector()
+    {
+        QString error;
+        auto objects = Document::open(QStringLiteral(TEST_DATA_DIR "/objects.pdf"), &error);
+        QVERIFY2(objects, qPrintable(error));
+        auto at = [&](double x, double y) { return objects->objectsAt(0, QPointF(x, 300 - y)); };
+
+        QVERIFY(at(290, 290).isEmpty()); // empty paper
+
+        const auto text = at(40, 253);
+        QCOMPARE(text.size(), 1);
+        QCOMPARE(text.first().kind, QStringLiteral("Text"));
+        QVERIFY(text.first().font.contains(QStringLiteral("Helvetica"), Qt::CaseInsensitive)
+                || text.first().font.contains(QStringLiteral("Nimbus"), Qt::CaseInsensitive));
+        QCOMPARE(qRound(text.first().fontSize), 12);
+        QCOMPARE(text.first().values, QStringList({ "Cyan 0 %", "Magenta 0 %", "Yellow 0 %", "Black 100 %" }));
+
+        const auto image = at(60, 150);
+        QCOMPARE(image.size(), 1);
+        QCOMPARE(image.first().kind, QStringLiteral("Image"));
+        QCOMPARE(image.first().imageWidth, 2);
+        QCOMPARE(image.first().imageHeight, 2);
+        QCOMPARE(qRound(image.first().ppiX), 2);
+        QCOMPARE(image.first().bitsPerComponent, 8);
+        QCOMPARE(image.first().bounds, QRectF(30, 300 - 192, 72, 72));
+
+        const auto spot = at(190, 160);
+        QCOMPARE(spot.size(), 1);
+        QCOMPARE(spot.first().colorSpace, QStringLiteral("Separation (PANTONE 185 C)"));
+        QCOMPARE(spot.first().values, QStringList({ "PANTONE 185 C 100 %" }));
+        QVERIFY(spot.first().overprint);
+        QCOMPARE(spot.first().overprintMode, 1);
+
+        const auto stacked = at(180, 50); // RGB square on top of a CMYK square
+        QCOMPARE(stacked.size(), 2);
+        QCOMPARE(stacked.at(0).values, QStringList({ "Red 255", "Green 0", "Blue 0" }));
+        QCOMPARE(stacked.at(1).values, QStringList({ "Cyan 10 %", "Magenta 20 %", "Yellow 30 %", "Black 0 %" }));
+        QVERIFY(!stacked.at(0).overprint);
+    }
+
     void profileLibrary()
     {
         const QString src = QStringLiteral("/usr/share/color/icc/ghostscript/default_cmyk.icc");

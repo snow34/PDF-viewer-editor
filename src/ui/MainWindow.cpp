@@ -7,12 +7,18 @@
 #include "engine/Compositor.h"
 
 #include <QApplication>
+
+#include <tuple>
 #include <QDesktopServices>
 #include <QHBoxLayout>
 #include <QMenu>
 #include <QUrl>
 #include <QWidgetAction>
 #include <QDir>
+#include <QLineEdit>
+#include <QListWidget>
+#include <QPainter>
+#include <QTreeWidget>
 #include <QDockWidget>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -32,6 +38,7 @@ const double kMinZoom = 0.05;
 const double kMaxZoom = 64.0;
 const double kMaxPixels = 60e6; // keeps a rendered page within a sensible amount of memory
 const double kMmPerPoint = 25.4 / 72.0;
+const int kThumbnailSize = 120;
 } // namespace
 
 MainWindow::MainWindow(bool safeMode) : m_safeMode(safeMode)
@@ -39,6 +46,8 @@ MainWindow::MainWindow(bool safeMode) : m_safeMode(safeMode)
     qRegisterMetaType<engine::PageRender>();
     qRegisterMetaType<engine::DocumentInfo>();
     qRegisterMetaType<QList<QSizeF>>();
+    qRegisterMetaType<QList<engine::SearchHit>>();
+    qRegisterMetaType<QList<engine::ObjectInfo>>();
 
     setWindowTitle(QApplication::applicationDisplayName());
     resize(1200, 820);
@@ -57,6 +66,59 @@ MainWindow::MainWindow(bool safeMode) : m_safeMode(safeMode)
                                  | QDockWidget::DockWidgetFloatable);
     addDockWidget(Qt::RightDockWidgetArea, m_previewWindow);
     m_previewWindow->setFloating(true);
+
+    // Thumbnails and the object inspector are ordinary panels: docked by
+    // default, and they can be dragged out into their own windows.
+    m_thumbnails = new QListWidget;
+    m_thumbnails->setObjectName(QStringLiteral("thumbnails"));
+    m_thumbnails->setViewMode(QListView::IconMode);
+    m_thumbnails->setIconSize(QSize(kThumbnailSize, kThumbnailSize));
+    m_thumbnails->setFlow(QListView::TopToBottom);
+    m_thumbnails->setWrapping(false);
+    m_thumbnails->setMovement(QListView::Static);
+    m_thumbnails->setSpacing(6);
+    m_thumbnails->setMinimumWidth(kThumbnailSize + 40);
+    m_thumbnails->setMaximumWidth(kThumbnailSize + 60);
+    m_thumbnailDock = new QDockWidget(tr("Pages"), this);
+    m_thumbnailDock->setObjectName(QStringLiteral("thumbnailPanel"));
+    m_thumbnailDock->setWidget(m_thumbnails);
+    addDockWidget(Qt::LeftDockWidgetArea, m_thumbnailDock);
+    connect(m_thumbnails, &QListWidget::currentRowChanged, this, [this](int row) {
+        if (row >= 0)
+            goToPage(row);
+    });
+
+    m_inspector = new QTreeWidget;
+    m_inspector->setObjectName(QStringLiteral("inspector"));
+    m_inspector->setHeaderLabels({ tr("Property"), tr("Value") });
+    m_inspector->setMinimumWidth(260);
+    m_inspectorDock = new QDockWidget(tr("Object Inspector"), this);
+    m_inspectorDock->setObjectName(QStringLiteral("inspectorPanel"));
+    m_inspectorDock->setWidget(m_inspector);
+    addDockWidget(Qt::RightDockWidgetArea, m_inspectorDock);
+    new QTreeWidgetItem(m_inspector, { tr("Click on the page to inspect what is there.") });
+    m_inspector->setFirstColumnSpanned(0, QModelIndex(), true);
+
+    m_searchBar = new QToolBar(tr("Search"), this);
+    m_searchBar->setObjectName(QStringLiteral("searchBar"));
+    m_searchBar->setMovable(false);
+    m_searchField = new QLineEdit;
+    m_searchField->setObjectName(QStringLiteral("searchField"));
+    m_searchField->setPlaceholderText(tr("Find text in the document"));
+    m_searchField->setClearButtonEnabled(true);
+    m_searchField->setMaximumWidth(320);
+    m_searchStatus = new QLabel;
+    m_searchStatus->setObjectName(QStringLiteral("searchStatus"));
+    m_searchBar->addWidget(new QLabel(tr(" Find: ")));
+    m_searchBar->addWidget(m_searchField);
+    addToolBar(Qt::BottomToolBarArea, m_searchBar);
+    m_searchBar->hide();
+    connect(m_searchField, &QLineEdit::returnPressed, this, [this] {
+        if (m_searchField->text() == m_searchText && !m_hits.isEmpty())
+            stepSearch(1);
+        else
+            startSearch();
+    });
 
     m_banner = new QLabel;
     m_sizeLabel = new QLabel;
@@ -77,6 +139,12 @@ MainWindow::MainWindow(bool safeMode) : m_safeMode(safeMode)
     connect(this, &MainWindow::requestRender, m_worker, &RenderWorker::renderPage);
     connect(m_worker, &RenderWorker::documentOpened, this, &MainWindow::onOpened);
     connect(m_worker, &RenderWorker::pageRendered, this, &MainWindow::onRendered);
+    connect(this, &MainWindow::requestThumbnail, m_worker, &RenderWorker::renderThumbnail);
+    connect(this, &MainWindow::requestSearch, m_worker, &RenderWorker::search);
+    connect(this, &MainWindow::requestInspect, m_worker, &RenderWorker::inspect);
+    connect(m_worker, &RenderWorker::thumbnailRendered, this, &MainWindow::onThumbnail);
+    connect(m_worker, &RenderWorker::searchFinished, this, &MainWindow::onSearchFinished);
+    connect(m_worker, &RenderWorker::objectsFound, this, &MainWindow::onObjectsFound);
     connect(m_worker, &RenderWorker::openFailed, this, [this](const QString &path, const QString &error) {
         QMessageBox::warning(this, windowTitle(),
                              tr("Could not open %1\n\n%2").arg(QDir::toNativeSeparators(path), error));
@@ -88,6 +156,10 @@ MainWindow::MainWindow(bool safeMode) : m_safeMode(safeMode)
     connect(m_view, &PageView::hovered, this, [this](int x, int y) {
         if (m_render.image)
             m_panel->setInkValues(engine::inkValues(*m_render.image, x, y, m_panel->sampleSize()));
+    });
+    connect(m_view, &PageView::clicked, this, [this](QPointF point) {
+        if (m_info.pageCount > 0)
+            emit requestInspect(m_page, point, m_rotation);
     });
     connect(m_view, &PageView::hoverLeft, this, [this] { m_panel->setInkValues({}); });
     connect(m_panel, &OutputPreviewPanel::displayChanged, this, &MainWindow::recomposite);
@@ -150,6 +222,45 @@ void MainWindow::buildActions()
     connect(addItem(QStringLiteral("view.nextPage"), tr("&Next page"), tr("Go to the next page"),
                     QKeySequence(Qt::Key_PageDown)),
             &QAction::triggered, this, [this] { goToPage(m_page + 1); });
+
+    connect(addItem(QStringLiteral("view.rotateLeft"), tr("Rotate &left"), tr("Turn the view 90° anticlockwise"),
+                    QKeySequence(tr("Ctrl+Shift+-"))),
+            &QAction::triggered, this, [this] { rotateBy(-90); });
+    connect(addItem(QStringLiteral("view.rotateRight"), tr("Rotate &right"), tr("Turn the view 90° clockwise"),
+                    QKeySequence(tr("Ctrl+Shift++"))),
+            &QAction::triggered, this, [this] { rotateBy(90); });
+
+    connect(addItem(QStringLiteral("edit.find"), tr("&Find…"), tr("Search for text"), QKeySequence::Find),
+            &QAction::triggered, this, &MainWindow::showSearchBar);
+    connect(addItem(QStringLiteral("edit.findNext"), tr("Find &next"), tr("Go to the next search result"),
+                    QKeySequence::FindNext),
+            &QAction::triggered, this, [this] { stepSearch(1); });
+    connect(addItem(QStringLiteral("edit.findPrevious"), tr("Find &previous"),
+                    tr("Go to the previous search result"), QKeySequence::FindPrevious),
+            &QAction::triggered, this, [this] { stepSearch(-1); });
+    m_searchBar->addAction(m_items.value(QStringLiteral("edit.findPrevious")));
+    m_searchBar->addAction(m_items.value(QStringLiteral("edit.findNext")));
+    m_searchBar->addWidget(m_searchStatus);
+    auto *spacer = new QWidget;
+    spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    m_searchBar->addWidget(spacer);
+    m_searchBar->addAction(tr("Close"), this, [this] {
+        m_searchBar->hide();
+        m_hits.clear();
+        m_currentHit = -1;
+        m_searchText.clear();
+        m_searchStatus->clear();
+        m_view->setSearchHits({}, {});
+    });
+
+    for (const auto &panel : { std::make_tuple(QStringLiteral("window.thumbnails"), m_thumbnailDock,
+                                               tr("Show or hide the page thumbnails")),
+                               std::make_tuple(QStringLiteral("window.inspector"), m_inspectorDock,
+                                               tr("Show or hide the Object Inspector")) }) {
+        QAction *toggle = std::get<1>(panel)->toggleViewAction();
+        m_items.insert(std::get<0>(panel), toggle);
+        m_itemHelp.append({ std::get<0>(panel), std::get<2>(panel) });
+    }
 
     connect(addItem(QStringLiteral("tools.profiles"), tr("&Colour profiles…"), tr("Manage ICC profiles")),
             &QAction::triggered, this, &MainWindow::showProfiles);
@@ -341,7 +452,14 @@ void MainWindow::onOpened(const engine::DocumentInfo &info, const QList<QSizeF> 
     m_info = info;
     m_sizes = sizes;
     m_page = 0;
+    m_rotation = 0;
     m_render = {};
+    m_hits.clear();
+    m_currentHit = -1;
+    m_searchText.clear();
+    m_searchStatus->clear();
+    m_view->setSearchHits({}, {});
+    m_view->setSelection({});
     setWindowTitle(QStringLiteral("%1 – %2").arg(QFileInfo(info.path).fileName(),
                                                  QApplication::applicationDisplayName()));
 
@@ -360,7 +478,187 @@ void MainWindow::onOpened(const engine::DocumentInfo &info, const QList<QSizeF> 
     m_pageCount->setText(tr(" of %1 ").arg(info.pageCount));
     refreshProfiles();
     updateBanner();
+    restartThumbnails();
     render();
+}
+
+QSizeF MainWindow::viewSize(int page) const
+{
+    const QSizeF size = m_sizes.value(page);
+    return m_rotation % 180 == 0 ? size : size.transposed();
+}
+
+void MainWindow::rotateBy(int degrees)
+{
+    if (m_info.pageCount == 0)
+        return;
+    m_rotation = ((m_rotation + degrees) % 360 + 360) % 360;
+    m_view->setSelection({});
+    restartThumbnails();
+    render();
+    if (!m_searchText.isEmpty())
+        startSearch(); // result positions depend on the rotation
+}
+
+void MainWindow::restartThumbnails()
+{
+    ++m_thumbGeneration;
+    m_nextThumbnail = 0;
+    QSignalBlocker block(m_thumbnails);
+    if (m_thumbnails->count() != m_info.pageCount) {
+        m_thumbnails->clear();
+        QPixmap blank(kThumbnailSize, kThumbnailSize);
+        blank.fill(Qt::transparent);
+        for (int i = 0; i < m_info.pageCount; ++i) {
+            auto *item = new QListWidgetItem(QIcon(blank), QString::number(i + 1), m_thumbnails);
+            item->setTextAlignment(Qt::AlignHCenter);
+        }
+    }
+    m_thumbnails->setCurrentRow(m_page);
+    // One at a time, so thumbnails never hold up the page being viewed.
+    if (m_info.pageCount > 0)
+        emit requestThumbnail(0, kThumbnailSize, m_rotation, m_thumbGeneration);
+}
+
+void MainWindow::onThumbnail(const engine::PageRender &render, int generation)
+{
+    if (generation != m_thumbGeneration)
+        return;
+    if (render.image && render.page < m_thumbnails->count()) {
+        engine::CompositeOptions o = compositeOptions();
+        o.visible.clear();
+        o.showCoverage = false;
+        const QImage image = engine::composite(*render.image, o);
+        QPixmap framed(kThumbnailSize, kThumbnailSize);
+        framed.fill(Qt::transparent);
+        QPainter p(&framed);
+        const QPoint at((kThumbnailSize - image.width()) / 2, (kThumbnailSize - image.height()) / 2);
+        p.drawImage(at, image);
+        p.setPen(QColor(120, 120, 120));
+        p.drawRect(QRect(at, image.size()).adjusted(0, 0, -1, -1));
+        p.end();
+        QIcon icon(framed);
+        icon.addPixmap(framed, QIcon::Selected); // no colour wash over the selected page
+        m_thumbnails->item(render.page)->setIcon(icon);
+    }
+    m_nextThumbnail = render.page + 1;
+    if (m_nextThumbnail < m_info.pageCount)
+        emit requestThumbnail(m_nextThumbnail, kThumbnailSize, m_rotation, m_thumbGeneration);
+}
+
+void MainWindow::showSearchBar()
+{
+    m_searchBar->show();
+    m_searchField->setFocus();
+    m_searchField->selectAll();
+}
+
+void MainWindow::startSearch()
+{
+    m_searchText = m_searchField->text();
+    m_hits.clear();
+    m_currentHit = -1;
+    m_view->setSearchHits({}, {});
+    if (m_searchText.isEmpty() || m_info.pageCount == 0) {
+        m_searchStatus->clear();
+        return;
+    }
+    m_searchStatus->setText(tr(" Searching…"));
+    m_worker->setLatestSearch(++m_searchId);
+    emit requestSearch(m_searchText, m_rotation, m_searchId);
+}
+
+void MainWindow::onSearchFinished(const QString &text, const QList<engine::SearchHit> &hits, int searchId)
+{
+    if (searchId != m_searchId)
+        return;
+    m_hits = hits;
+    m_currentHit = -1;
+    if (hits.isEmpty()) {
+        m_searchStatus->setText(tr(" \"%1\" was not found").arg(text));
+        m_view->setSearchHits({}, {});
+        return;
+    }
+    // Start with the first result on or after the page being viewed.
+    m_currentHit = 0;
+    for (int i = 0; i < hits.size(); ++i) {
+        if (hits.at(i).page >= m_page) {
+            m_currentHit = i;
+            break;
+        }
+    }
+    showCurrentHit();
+}
+
+void MainWindow::stepSearch(int direction)
+{
+    if (m_hits.isEmpty()) {
+        if (!m_searchBar->isVisible())
+            showSearchBar();
+        else if (!m_searchField->text().isEmpty() && m_searchField->text() != m_searchText)
+            startSearch();
+        return;
+    }
+    m_currentHit = (m_currentHit + direction + m_hits.size()) % m_hits.size();
+    showCurrentHit();
+}
+
+void MainWindow::showCurrentHit()
+{
+    if (m_currentHit < 0 || m_currentHit >= m_hits.size())
+        return;
+    m_searchStatus->setText(tr(" %1 of %2").arg(m_currentHit + 1).arg(m_hits.size()));
+    const int page = m_hits.at(m_currentHit).page;
+    if (page != m_page) {
+        goToPage(page); // the highlights are drawn when the page arrives
+        return;
+    }
+    QList<QRectF> onPage;
+    for (const engine::SearchHit &hit : m_hits)
+        if (hit.page == m_page)
+            onPage += hit.rects;
+    m_view->setSearchHits(onPage, m_hits.at(m_currentHit).rects);
+}
+
+void MainWindow::onObjectsFound(int page, const QList<engine::ObjectInfo> &objects)
+{
+    if (page != m_page)
+        return;
+    m_inspector->clear();
+    m_view->setSelection(objects.isEmpty() ? QRectF() : objects.first().bounds);
+    if (objects.isEmpty()) {
+        new QTreeWidgetItem(m_inspector, { tr("Nothing here"), tr("only paper") });
+        return;
+    }
+    auto row = [](QTreeWidgetItem *parent, const QString &name, const QString &value) {
+        new QTreeWidgetItem(parent, { name, value });
+    };
+    for (int i = 0; i < objects.size(); ++i) {
+        const engine::ObjectInfo &o = objects.at(i);
+        auto *top = new QTreeWidgetItem(
+            m_inspector, { o.kind, i == 0 ? tr("on top") : tr("underneath (%1)").arg(i) });
+        row(top, tr("Colour space"), o.colorSpace);
+        if (!o.values.isEmpty())
+            row(top, tr("Colour"), o.values.join(QStringLiteral(", ")));
+        row(top, tr("Overprint"), o.overprint ? tr("on (mode %1)").arg(o.overprintMode) : tr("off"));
+        if (o.opacity < 1.0)
+            row(top, tr("Opacity"), tr("%1 %").arg(qRound(o.opacity * 100)));
+        if (!o.font.isEmpty()) {
+            row(top, tr("Font"), o.fontSubstituted ? tr("%1 (substituted, not embedded)").arg(o.font) : o.font);
+            row(top, tr("Font size"), tr("%1 pt").arg(o.fontSize, 0, 'f', 1));
+        }
+        if (o.imageWidth > 0) {
+            row(top, tr("Pixels"), tr("%1 × %2, %3 bit").arg(o.imageWidth).arg(o.imageHeight).arg(o.bitsPerComponent));
+            row(top, tr("Resolution"), qAbs(o.ppiX - o.ppiY) < 1.0
+                                           ? tr("%1 ppi").arg(qRound(o.ppiX))
+                                           : tr("%1 × %2 ppi").arg(qRound(o.ppiX)).arg(qRound(o.ppiY)));
+        }
+        row(top, tr("Size"), tr("%1 × %2 mm")
+                                 .arg(o.bounds.width() * kMmPerPoint, 0, 'f', 1)
+                                 .arg(o.bounds.height() * kMmPerPoint, 0, 'f', 1));
+        top->setExpanded(i == 0);
+    }
+    m_inspector->resizeColumnToContents(0);
 }
 
 void MainWindow::goToPage(int page)
@@ -373,6 +671,10 @@ void MainWindow::goToPage(int page)
     m_page = page;
     QSignalBlocker block(m_pageSpin);
     m_pageSpin->setValue(page + 1);
+    QSignalBlocker blockList(m_thumbnails);
+    m_thumbnails->setCurrentRow(page);
+    m_view->setSelection({});
+    m_view->setSearchHits({}, {});
     render();
 }
 
@@ -394,7 +696,7 @@ void MainWindow::setFit(bool fit)
 
 double MainWindow::fitZoom() const
 {
-    const QSizeF page = m_sizes.value(m_page);
+    const QSizeF page = viewSize(m_page);
     if (page.isEmpty())
         return 1.0;
     const QSize room = m_view->maximumViewportSize() - QSize(28, 28);
@@ -407,14 +709,14 @@ void MainWindow::render()
         return;
     if (m_fit)
         m_zoom = fitZoom();
-    const QSizeF page = m_sizes.value(m_page);
+    const QSizeF page = viewSize(m_page);
     double limit = kMaxZoom;
     if (!page.isEmpty())
         limit = qMin(limit, std::sqrt(kMaxPixels / (page.width() * page.height())));
     m_zoom = qBound(kMinZoom, m_zoom, limit);
     m_zoomLabel->setText(tr("%1 %").arg(qRound(m_zoom * 72.0 / logicalDpiX() * 100)));
     m_worker->setLatestRequest(++m_requestId);
-    emit requestRender(m_page, m_zoom, m_requestId);
+    emit requestRender(m_page, m_zoom, m_rotation, m_requestId);
 }
 
 void MainWindow::onRendered(const engine::PageRender &render, int requestId)
@@ -436,6 +738,8 @@ void MainWindow::onRendered(const engine::PageRender &render, int requestId)
                              .arg(finished.width() * kMmPerPoint, 0, 'f', 1)
                              .arg(finished.height() * kMmPerPoint, 0, 'f', 1));
     recomposite();
+    if (m_currentHit >= 0 && m_currentHit < m_hits.size() && m_hits.at(m_currentHit).page == m_page)
+        showCurrentHit();
 
     if (!m_screenshot.isEmpty()) {
         const QString file = m_screenshot;
@@ -451,10 +755,8 @@ void MainWindow::onRendered(const engine::PageRender &render, int requestId)
     }
 }
 
-void MainWindow::recomposite()
+engine::CompositeOptions MainWindow::compositeOptions() const
 {
-    if (!m_render.image)
-        return;
     engine::CompositeOptions o;
     o.visible = m_panel->visibleInks();
     const QString choice = m_panel->simulationChoice();
@@ -468,9 +770,15 @@ void MainWindow::recomposite()
     o.intent = m_panel->intent();
     o.showCoverage = m_panel->showCoverage();
     o.coverageLimit = m_panel->coverageLimit();
+    return o;
+}
 
+void MainWindow::recomposite()
+{
+    if (!m_render.image)
+        return;
     bool calibrated = false;
-    const QImage image = engine::composite(*m_render.image, o, &calibrated);
+    const QImage image = engine::composite(*m_render.image, compositeOptions(), &calibrated);
     m_panel->setCalibrated(calibrated);
     m_view->setPage(image, m_render.boxes, m_render.zoom);
 }

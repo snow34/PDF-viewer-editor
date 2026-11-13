@@ -83,3 +83,29 @@ write(out_dir + "/pdfx4_marked.pdf", [
     PAGES, PAGE, BOX,
     b"<< /Type /Metadata /Subtype /XML /Length %d >>\nstream\n" % len(XMP) + XMP + b"\nendstream",
 ])
+
+# objects.pdf: one of each kind of object for the inspector and for search.
+#   text "Hello Prepress" at 12 pt in black, baseline (30, 250)
+#   a 2 x 2 pixel grey image placed 72 x 72 pt at (30, 120)      -> 2 ppi
+#   a spot colour square with overprint at (150, 120), 80 x 80 pt
+#   an RGB square at (150, 20), 60 x 60 pt, on top of a larger CMYK square
+OBJ_CONTENT = b"""
+BT /F1 12 Tf 0 0 0 1 k 30 250 Td (Hello Prepress) Tj ET
+q 72 0 0 72 30 120 cm /Im1 Do Q
+q /GS0 gs /CS0 cs 1 scn 150 120 80 80 re f Q
+0.1 0.2 0.3 0 k 140 10 100 80 re f
+1 0 0 rg 150 20 60 60 re f
+"""
+write(out_dir + "/objects.pdf", [
+    b"<< /Type /Catalog /Pages 2 0 R >>",
+    PAGES,
+    b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R /Resources <<"
+    b" /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >>"
+    b" /XObject << /Im1 5 0 R >> /ColorSpace << /CS0 6 0 R >>"
+    b" /ExtGState << /GS0 << /Type /ExtGState /OP true /op true /OPM 1 >> >> >> >>",
+    stream(OBJ_CONTENT),
+    b"<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray"
+    b" /BitsPerComponent 8 /Length 4 >>\nstream\n\x00\x80\x80\xff\nendstream",
+    b"[/Separation /PANTONE#20185#20C /DeviceCMYK 7 0 R]",
+    b"<< /FunctionType 2 /Domain [0 1] /C0 [0 0 0 0] /C1 [0 0.91 0.76 0] /N 1 >>",
+])

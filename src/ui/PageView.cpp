@@ -14,6 +14,8 @@ public:
     engine::PageBoxes boxes;
     double zoom = 1.0;
     bool showBoxes = true;
+    QList<QRectF> hits, currentHits;
+    QRectF selection;
 
     static constexpr int margin = 12;
 
@@ -33,9 +35,21 @@ protected:
         p.drawImage(margin, margin, image);
         p.setPen(QColor(120, 120, 120));
         p.drawRect(QRect(margin - 1, margin - 1, image.width() + 1, image.height() + 1));
+        p.translate(margin, margin);
+        auto scaled = [&](const QRectF &r) { return QRectF(r.topLeft() * zoom, r.size() * zoom); };
+        for (const QRectF &r : hits)
+            p.fillRect(scaled(r), QColor(255, 220, 0, 90));
+        for (const QRectF &r : currentHits) {
+            p.fillRect(scaled(r), QColor(255, 140, 0, 130));
+            p.setPen(QPen(QColor(200, 80, 0), 1));
+            p.drawRect(scaled(r));
+        }
+        if (selection.isValid()) {
+            p.setPen(QPen(QColor(255, 0, 200), 2));
+            p.drawRect(scaled(selection));
+        }
         if (!showBoxes)
             return;
-        p.translate(margin, margin);
         auto draw = [&](bool present, const QRectF &r, const QColor &c) {
             if (!present)
                 return;
@@ -54,6 +68,13 @@ protected:
             emit m_view->hovered(pos.x(), pos.y());
         else
             emit m_view->hoverLeft();
+    }
+
+    void mousePressEvent(QMouseEvent *e) override
+    {
+        const QPoint pos = e->position().toPoint() - QPoint(margin, margin);
+        if (e->button() == Qt::LeftButton && !image.isNull() && image.rect().contains(pos))
+            emit m_view->clicked(QPointF(pos) / zoom);
     }
 
     void leaveEvent(QEvent *) override { emit m_view->hoverLeft(); }
@@ -87,6 +108,23 @@ void PageView::setImage(const QImage &image)
 void PageView::setShowBoxes(bool on)
 {
     m_canvas->showBoxes = on;
+    m_canvas->update();
+}
+
+void PageView::setSearchHits(const QList<QRectF> &hits, const QList<QRectF> &current)
+{
+    m_canvas->hits = hits;
+    m_canvas->currentHits = current;
+    m_canvas->update();
+    if (!current.isEmpty()) {
+        const QPointF c = current.first().center() * m_canvas->zoom;
+        ensureVisible(int(c.x()) + PageCanvas::margin, int(c.y()) + PageCanvas::margin, 80, 80);
+    }
+}
+
+void PageView::setSelection(const QRectF &bounds)
+{
+    m_canvas->selection = bounds;
     m_canvas->update();
 }
 

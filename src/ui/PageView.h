@@ -18,10 +18,15 @@ public:
     void setImage(const QImage &image);
     void setShowBoxes(bool on);
     void clear();
+    // Overlays, in points: search hits (one of them current) and the object
+    // picked with the inspector.
+    void setSearchHits(const QList<QRectF> &hits, const QList<QRectF> &current);
+    void setSelection(const QRectF &bounds);
 
 signals:
     void hovered(int x, int y); // image pixel under the cursor
     void hoverLeft();
+    void clicked(QPointF point); // position on the page in points
     void zoomRequested(int steps);
     void fileDropped(const QString &path);
 

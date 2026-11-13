@@ -15,14 +15,17 @@ const char kDefaultLayout[] = R"({
     "file.open", "-",
     "view.previousPage", "pageNumber", "view.nextPage", "-",
     "view.zoomOut", "view.zoomIn", "view.fitPage", "-",
-    "tools.profiles"
+    "view.rotateLeft", "view.rotateRight", "-",
+    "edit.find", "tools.profiles"
   ],
   "menus": [
     { "title": "&File", "items": ["file.open", "file.recent", "file.properties", "-", "file.quit"] },
+    { "title": "&Edit", "items": ["edit.find", "edit.findNext", "edit.findPrevious"] },
     { "title": "&View", "items": ["view.zoomIn", "view.zoomOut", "view.actualSize", "view.fitPage", "-",
+                                  "view.rotateLeft", "view.rotateRight", "-",
                                   "view.previousPage", "view.nextPage"] },
     { "title": "&Tools", "items": ["tools.profiles"] },
-    { "title": "&Window", "items": ["window.outputPreview"] }
+    { "title": "&Window", "items": ["window.outputPreview", "window.thumbnails", "window.inspector"] }
   ],
   "shortcuts": {
   }

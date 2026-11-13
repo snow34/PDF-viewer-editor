@@ -23,10 +23,18 @@ public:
     // Renders a page to ink channels with overprint simulated. The ink values
     // are the file's own values: content is rendered in the document's CMYK
     // output intent when it has one, in DeviceCMYK otherwise.
-    PageRender render(int page, double zoom);
+    // `rotation` turns the view clockwise by 0, 90, 180 or 270 degrees.
+    PageRender render(int page, double zoom, int rotation = 0);
 
-    // Page size in points, display orientation.
+    // Page size in points, display orientation, before view rotation.
     QSizeF pageSize(int page);
+
+    // Places on one page where `text` occurs (case-insensitive).
+    QList<SearchHit> search(int page, const QString &text, int rotation = 0);
+
+    // Objects whose bounding box contains `point` (view coordinates in
+    // points), topmost first. Clipping is not taken into account.
+    QList<ObjectInfo> objectsAt(int page, QPointF point, int rotation = 0);
 
 private:
     Document() = default;

@@ -7,6 +7,7 @@
 #include <mupdf/fitz.h>
 #include <mupdf/pdf.h>
 
+#include <cmath>
 #include <cstring>
 
 namespace engine {
@@ -27,6 +28,178 @@ QString pdfText(fz_context *ctx, pdf_obj *obj)
     if (pdf_is_string(ctx, obj))
         return QString::fromUtf8(pdf_to_text_string(ctx, obj));
     return {};
+}
+
+// Maps page space to the rotated view with its top-left corner at 0, 0.
+fz_matrix viewMatrix(fz_rect bounds, int rotation)
+{
+    const fz_matrix m = fz_rotate(float(rotation));
+    const fz_rect r = fz_transform_rect(bounds, m);
+    return fz_concat(m, fz_translate(-r.x0, -r.y0));
+}
+
+// A device that paints nothing and records what lies under one point.
+struct InspectDevice {
+    fz_device super;
+    fz_point point;       // page space
+    fz_matrix view;       // page space -> view
+    QList<ObjectInfo> *found;
+};
+
+QString colorSpaceLabel(fz_context *ctx, fz_colorspace *cs)
+{
+    if (!cs)
+        return QStringLiteral("None");
+    QString name = QString::fromUtf8(fz_colorspace_name(ctx, cs));
+    const auto type = fz_colorspace_type(ctx, cs);
+    if (type == FZ_COLORSPACE_SEPARATION) {
+        QStringList inks;
+        for (int i = 0; i < fz_colorspace_n(ctx, cs); ++i)
+            inks << QString::fromUtf8(fz_colorspace_colorant(ctx, cs, i));
+        name = QStringLiteral("%1 (%2)")
+                   .arg(inks.size() > 1 ? QStringLiteral("DeviceN") : QStringLiteral("Separation"),
+                        inks.join(QStringLiteral(", ")));
+    }
+    return name;
+}
+
+QStringList colorValues(fz_context *ctx, fz_colorspace *cs, const float *color)
+{
+    QStringList values;
+    if (!cs || !color)
+        return values;
+    const auto type = fz_colorspace_type(ctx, cs);
+    const int n = fz_colorspace_n(ctx, cs);
+    static const char *const rgb[] = { "Red", "Green", "Blue" };
+    static const char *const cmyk[] = { "Cyan", "Magenta", "Yellow", "Black" };
+    static const char *const lab[] = { "L", "a", "b" };
+    for (int i = 0; i < n; ++i) {
+        const char *colorant = fz_colorspace_colorant(ctx, cs, i);
+        QString name = colorant ? QString::fromUtf8(colorant) : QString();
+        if (type == FZ_COLORSPACE_RGB && n == 3) {
+            values << QStringLiteral("%1 %2").arg(QLatin1String(rgb[i])).arg(qRound(color[i] * 255));
+        } else if (type == FZ_COLORSPACE_LAB && n == 3) {
+            values << QStringLiteral("%1 %2").arg(QLatin1String(lab[i])).arg(double(color[i]), 0, 'f', 1);
+        } else {
+            if (type == FZ_COLORSPACE_CMYK && n == 4)
+                name = QLatin1String(cmyk[i]);
+            else if (type == FZ_COLORSPACE_GRAY)
+                name = QStringLiteral("Gray");
+            else if (name.isEmpty())
+                name = QStringLiteral("Channel %1").arg(i + 1);
+            values << QStringLiteral("%1 %2 %").arg(name).arg(qRound(color[i] * 100));
+        }
+    }
+    return values;
+}
+
+bool hit(InspectDevice *d, fz_rect r)
+{
+    return d->point.x >= r.x0 && d->point.x <= r.x1 && d->point.y >= r.y0 && d->point.y <= r.y1;
+}
+
+ObjectInfo describe(fz_context *ctx, InspectDevice *d, const char *kind, fz_rect bounds,
+                    fz_colorspace *cs, const float *color, float alpha, fz_color_params params)
+{
+    ObjectInfo o;
+    o.kind = QString::fromLatin1(kind);
+    o.colorSpace = colorSpaceLabel(ctx, cs);
+    o.values = colorValues(ctx, cs, color);
+    o.opacity = alpha;
+    o.overprint = params.op != 0;
+    o.overprintMode = params.opm;
+    o.bounds = toQRect(fz_transform_rect(bounds, d->view));
+    return o;
+}
+
+void inspectFillPath(fz_context *ctx, fz_device *dev, const fz_path *path, int, fz_matrix ctm,
+                     fz_colorspace *cs, const float *color, float alpha, fz_color_params params)
+{
+    auto *d = reinterpret_cast<InspectDevice *>(dev);
+    const fz_rect r = fz_bound_path(ctx, path, nullptr, ctm);
+    if (hit(d, r))
+        d->found->prepend(describe(ctx, d, "Filled path", r, cs, color, alpha, params));
+}
+
+void inspectStrokePath(fz_context *ctx, fz_device *dev, const fz_path *path, const fz_stroke_state *stroke,
+                       fz_matrix ctm, fz_colorspace *cs, const float *color, float alpha,
+                       fz_color_params params)
+{
+    auto *d = reinterpret_cast<InspectDevice *>(dev);
+    const fz_rect r = fz_bound_path(ctx, path, stroke, ctm);
+    if (hit(d, r))
+        d->found->prepend(describe(ctx, d, "Stroked path", r, cs, color, alpha, params));
+}
+
+void inspectText(fz_context *ctx, InspectDevice *d, const char *kind, const fz_text *text,
+                 const fz_stroke_state *stroke, fz_matrix ctm, fz_colorspace *cs, const float *color,
+                 float alpha, fz_color_params params)
+{
+    const fz_rect r = fz_bound_text(ctx, text, stroke, ctm);
+    if (!hit(d, r))
+        return;
+    ObjectInfo o = describe(ctx, d, kind, r, cs, color, alpha, params);
+    if (const fz_text_span *span = text->head) {
+        o.font = QString::fromUtf8(fz_font_name(ctx, span->font));
+        o.fontSize = fz_matrix_expansion(fz_concat(span->trm, ctm));
+        o.fontSubstituted = fz_font_flags(span->font)->ft_substitute;
+    }
+    d->found->prepend(o);
+}
+
+void inspectFillText(fz_context *ctx, fz_device *dev, const fz_text *text, fz_matrix ctm,
+                     fz_colorspace *cs, const float *color, float alpha, fz_color_params params)
+{
+    inspectText(ctx, reinterpret_cast<InspectDevice *>(dev), "Text", text, nullptr, ctm, cs, color, alpha, params);
+}
+
+void inspectStrokeText(fz_context *ctx, fz_device *dev, const fz_text *text, const fz_stroke_state *stroke,
+                       fz_matrix ctm, fz_colorspace *cs, const float *color, float alpha,
+                       fz_color_params params)
+{
+    inspectText(ctx, reinterpret_cast<InspectDevice *>(dev), "Outlined text", text, stroke, ctm, cs, color,
+                alpha, params);
+}
+
+void inspectImageCommon(fz_context *ctx, InspectDevice *d, const char *kind, fz_image *image, fz_matrix ctm,
+                        fz_colorspace *cs, const float *color, float alpha, fz_color_params params)
+{
+    const fz_rect r = fz_transform_rect(fz_unit_rect, ctm);
+    if (!hit(d, r))
+        return;
+    ObjectInfo o = describe(ctx, d, kind, r, cs, color, alpha, params);
+    o.imageWidth = image->w;
+    o.imageHeight = image->h;
+    o.bitsPerComponent = image->bpc;
+    // Size on the page in inches along the image's own axes.
+    const double widthIn = std::hypot(ctm.a, ctm.b) / 72.0;
+    const double heightIn = std::hypot(ctm.c, ctm.d) / 72.0;
+    o.ppiX = widthIn > 0 ? image->w / widthIn : 0;
+    o.ppiY = heightIn > 0 ? image->h / heightIn : 0;
+    d->found->prepend(o);
+}
+
+void inspectImage(fz_context *ctx, fz_device *dev, fz_image *image, fz_matrix ctm, float alpha,
+                  fz_color_params params)
+{
+    inspectImageCommon(ctx, reinterpret_cast<InspectDevice *>(dev), "Image", image, ctm, image->colorspace,
+                       nullptr, alpha, params);
+}
+
+void inspectImageMask(fz_context *ctx, fz_device *dev, fz_image *image, fz_matrix ctm, fz_colorspace *cs,
+                      const float *color, float alpha, fz_color_params params)
+{
+    inspectImageCommon(ctx, reinterpret_cast<InspectDevice *>(dev), "Image mask", image, ctm, cs, color,
+                       alpha, params);
+}
+
+void inspectShade(fz_context *ctx, fz_device *dev, fz_shade *shade, fz_matrix ctm, float alpha,
+                  fz_color_params params)
+{
+    auto *d = reinterpret_cast<InspectDevice *>(dev);
+    const fz_rect r = fz_bound_shade(ctx, shade, ctm);
+    if (hit(d, r))
+        d->found->prepend(describe(ctx, d, "Gradient", r, shade->colorspace, nullptr, alpha, params));
 }
 
 } // namespace
@@ -185,11 +358,12 @@ QSizeF Document::pageSize(int pageNo)
     return QSizeF(r.x1 - r.x0, r.y1 - r.y0);
 }
 
-PageRender Document::render(int pageNo, double zoom)
+PageRender Document::render(int pageNo, double zoom, int rotation)
 {
     PageRender out;
     out.page = pageNo;
     out.zoom = zoom;
+    out.rotation = rotation;
     auto image = std::make_shared<SeparatedImage>();
     image->inks = { QStringLiteral("Cyan"), QStringLiteral("Magenta"), QStringLiteral("Yellow"),
                     QStringLiteral("Black") };
@@ -209,7 +383,8 @@ PageRender Document::render(int pageNo, double zoom)
     {
         page = fz_load_page(ctx, m_doc, pageNo);
         const fz_rect bounds = fz_bound_page(ctx, page);
-        const fz_matrix ctm = fz_scale(float(zoom), float(zoom));
+        const fz_matrix view = viewMatrix(bounds, rotation);
+        const fz_matrix ctm = fz_concat(view, fz_scale(float(zoom), float(zoom)));
         const fz_irect bbox = fz_round_rect(fz_transform_rect(bounds, ctm));
 
         // Render into the document's own CMYK space so DeviceCMYK values in
@@ -261,7 +436,8 @@ PageRender Document::render(int pageNo, double zoom)
                 const bool ok = pdf_is_array(ctx, o) && pdf_array_len(ctx, o) == 4;
                 if (present)
                     *present = ok;
-                return ok ? toQRect(fz_transform_rect(pdf_to_rect(ctx, o), pm)) : QRectF();
+                return ok ? toQRect(fz_transform_rect(pdf_to_rect(ctx, o), fz_concat(pm, view)))
+                          : QRectF();
             };
             out.boxes.media = box(PDF_NAME(MediaBox), true, nullptr);
             out.boxes.crop = box(PDF_NAME(CropBox), true, &out.boxes.hasCrop);
@@ -287,6 +463,85 @@ PageRender Document::render(int pageNo, double zoom)
     else
         out.image = image;
     return out;
+}
+
+QList<SearchHit> Document::search(int pageNo, const QString &text, int rotation)
+{
+    QList<SearchHit> hits;
+    const QByteArray needle = text.toUtf8();
+    if (needle.isEmpty())
+        return hits;
+    constexpr int maxQuads = 2000;
+    std::vector<fz_quad> quads(maxQuads);
+    std::vector<int> marks(maxQuads);
+    fz_context *ctx = m_ctx;
+    fz_page *page = nullptr;
+    int count = 0;
+    fz_matrix view = fz_identity;
+    fz_var(page);
+    fz_try(ctx)
+    {
+        page = fz_load_page(ctx, m_doc, pageNo);
+        view = viewMatrix(fz_bound_page(ctx, page), rotation);
+        count = fz_search_page(ctx, page, needle.constData(), marks.data(), quads.data(), maxQuads);
+    }
+    fz_always(ctx)
+    {
+        fz_drop_page(ctx, page);
+    }
+    fz_catch(ctx)
+    {
+        return hits;
+    }
+    for (int i = 0; i < count; ++i) {
+        if (marks[size_t(i)] || hits.isEmpty()) {
+            SearchHit h;
+            h.page = pageNo;
+            hits.append(h);
+        }
+        hits.last().rects.append(toQRect(fz_transform_rect(fz_rect_from_quad(quads[size_t(i)]), view)));
+    }
+    return hits;
+}
+
+QList<ObjectInfo> Document::objectsAt(int pageNo, QPointF point, int rotation)
+{
+    QList<ObjectInfo> found;
+    fz_context *ctx = m_ctx;
+    fz_page *page = nullptr;
+    fz_device *dev = nullptr;
+    fz_var(page);
+    fz_var(dev);
+    fz_try(ctx)
+    {
+        page = fz_load_page(ctx, m_doc, pageNo);
+        const fz_matrix view = viewMatrix(fz_bound_page(ctx, page), rotation);
+        InspectDevice *d = fz_new_derived_device(ctx, InspectDevice);
+        dev = &d->super;
+        d->view = view;
+        d->point = fz_transform_point(fz_make_point(float(point.x()), float(point.y())),
+                                      fz_invert_matrix(view));
+        d->found = &found;
+        d->super.fill_path = inspectFillPath;
+        d->super.stroke_path = inspectStrokePath;
+        d->super.fill_text = inspectFillText;
+        d->super.stroke_text = inspectStrokeText;
+        d->super.fill_image = inspectImage;
+        d->super.fill_image_mask = inspectImageMask;
+        d->super.fill_shade = inspectShade;
+        fz_run_page(ctx, page, dev, fz_identity, nullptr);
+        fz_close_device(ctx, dev);
+    }
+    fz_always(ctx)
+    {
+        fz_drop_device(ctx, dev);
+        fz_drop_page(ctx, page);
+    }
+    fz_catch(ctx)
+    {
+        // Report what was found before the error.
+    }
+    return found;
 }
 
 } // namespace engine

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Customization.h"
+#include "engine/Compositor.h"
 #include "engine/ProfileLibrary.h"
 #include "engine/Types.h"
 
@@ -13,6 +14,9 @@ class PageView;
 class QDockWidget;
 class RenderWorker;
 class QLabel;
+class QLineEdit;
+class QListWidget;
+class QTreeWidget;
 class QMenu;
 class QSpinBox;
 class QToolBar;
@@ -31,7 +35,10 @@ public:
 
 signals:
     void requestOpen(const QString &path);
-    void requestRender(int page, double zoom, int requestId);
+    void requestRender(int page, double zoom, int rotation, int requestId);
+    void requestThumbnail(int page, int size, int rotation, int generation);
+    void requestSearch(const QString &text, int rotation, int searchId);
+    void requestInspect(int page, QPointF point, int rotation);
 
 protected:
     void resizeEvent(QResizeEvent *event) override;
@@ -50,6 +57,17 @@ private:
     void chooseFile();
     void onOpened(const engine::DocumentInfo &info, const QList<QSizeF> &sizes);
     void onRendered(const engine::PageRender &render, int requestId);
+    void onThumbnail(const engine::PageRender &render, int generation);
+    void restartThumbnails();
+    void rotateBy(int degrees);
+    QSizeF viewSize(int page) const;
+    engine::CompositeOptions compositeOptions() const;
+    void showSearchBar();
+    void startSearch();
+    void onSearchFinished(const QString &text, const QList<engine::SearchHit> &hits, int searchId);
+    void stepSearch(int direction);
+    void showCurrentHit();
+    void onObjectsFound(int page, const QList<engine::ObjectInfo> &objects);
     void goToPage(int page);
     void zoomBy(int steps);
     void setFit(bool fit);
@@ -77,6 +95,23 @@ private:
     double m_zoom = 1.0;
     bool m_fit = true;
     int m_requestId = 0;
+    int m_rotation = 0;
+
+    QDockWidget *m_thumbnailDock;
+    QListWidget *m_thumbnails;
+    int m_thumbGeneration = 0;
+    int m_nextThumbnail = 0;
+
+    QDockWidget *m_inspectorDock;
+    QTreeWidget *m_inspector;
+
+    QToolBar *m_searchBar;
+    QLineEdit *m_searchField;
+    QLabel *m_searchStatus;
+    QString m_searchText;
+    QList<engine::SearchHit> m_hits;
+    int m_currentHit = -1;
+    int m_searchId = 0;
     QString m_screenshot;
 
     QSpinBox *m_pageSpin;

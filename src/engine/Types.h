@@ -33,8 +33,8 @@ struct SeparatedImage {
     }
 };
 
-// Page boxes in points, in display orientation (origin top-left, y down),
-// relative to the rendered area (the CropBox).
+// Page boxes in points, in display orientation (origin top-left, y down,
+// view rotation applied), relative to the rendered area (the CropBox).
 struct PageBoxes {
     QRectF media, crop, bleed, trim, art;
     bool hasCrop = false, hasBleed = false, hasTrim = false, hasArt = false;
@@ -43,9 +43,34 @@ struct PageBoxes {
 struct PageRender {
     int page = -1;
     double zoom = 1.0;
+    int rotation = 0; // 0, 90, 180 or 270 degrees clockwise
     std::shared_ptr<SeparatedImage> image;
     PageBoxes boxes;
     QString error;
+};
+
+// One place where the search text was found. Rectangles are in points, in
+// the same rotated, top-left coordinate system as PageBoxes.
+struct SearchHit {
+    int page = -1;
+    QList<QRectF> rects;
+};
+
+// One painted object on a page, as reported by the object inspector.
+struct ObjectInfo {
+    QString kind;        // "Filled path", "Stroked path", "Text", "Image", ...
+    QString colorSpace;  // e.g. "DeviceCMYK", "Separation (PANTONE 185 C)"
+    QStringList values;  // e.g. "Cyan 40 %"
+    double opacity = 1.0;
+    bool overprint = false;
+    int overprintMode = 0;
+    QString font;        // text only
+    double fontSize = 0; // points
+    bool fontSubstituted = false;
+    int imageWidth = 0, imageHeight = 0; // pixels, images only
+    int bitsPerComponent = 0;
+    double ppiX = 0, ppiY = 0;           // effective resolution on the page
+    QRectF bounds;       // view coordinates, points
 };
 
 struct OutputIntentInfo {
@@ -73,3 +98,5 @@ struct DocumentInfo {
 
 Q_DECLARE_METATYPE(engine::PageRender)
 Q_DECLARE_METATYPE(engine::DocumentInfo)
+Q_DECLARE_METATYPE(engine::SearchHit)
+Q_DECLARE_METATYPE(engine::ObjectInfo)
