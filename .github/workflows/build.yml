@@ -17,3 +17,60 @@ jobs:
           cmake --build build -j
       - name: Test
         run: ctest --test-dir build --output-on-failure
+
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-qt6-base
+            mingw-w64-ucrt-x86_64-libmupdf
+            mingw-w64-ucrt-x86_64-lcms2
+            mingw-w64-ucrt-x86_64-nsis
+      - name: Build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+      - name: Build installer
+        run: |
+          version=$(sed -n 's/^project(PrepressPdf VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          packaging/windows/deploy.sh build dist
+          makensis -DVERSION=$version "-DSOURCE=$(cygpath -w "$PWD/dist")" \
+            "-DOUTFILE=$(cygpath -w "$PWD/PrepressPDF-$version-setup.exe")" packaging/windows/installer.nsi
+      - name: Install it and start the installed app
+        shell: pwsh
+        run: |
+          $installer = (Get-ChildItem PrepressPDF-*-setup.exe).FullName
+          Start-Process $installer -ArgumentList '/S' -Wait
+          $exe = "$env:ProgramFiles\Prepress PDF\prepresspdf.exe"
+          if (-not (Test-Path $exe)) { throw "The installer did not install $exe" }
+          # A bare PATH proves the installed folder is complete on its own.
+          $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
+          $shot = Join-Path $pwd 'windows-screenshot.png'
+          $pdf = Join-Path $pwd 'tests\data\ink_patches.pdf'
+          $p = Start-Process $exe -ArgumentList '--screenshot', "`"$shot`"", "`"$pdf`"" -PassThru
+          if (-not $p.WaitForExit(90000)) { $p.Kill(); throw "The installed app did not open the test file" }
+          if (-not (Test-Path $shot)) { throw "The installed app did not produce a screenshot" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: PrepressPDF-*-setup.exe
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-screenshots
+          path: windows-screenshot*.png
+          if-no-files-found: ignore

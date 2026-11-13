@@ -9,22 +9,29 @@ find_package(Qt6 6.4 REQUIRED COMPONENTS Widgets Test)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(LCMS2 REQUIRED IMPORTED_TARGET lcms2)
 
-# MuPDF: static system library plus the third-party libraries it was built with.
-find_path(MUPDF_INCLUDE_DIR mupdf/fitz.h REQUIRED)
-find_library(MUPDF_LIBRARY mupdf REQUIRED)
-find_library(MUPDF_THIRD_LIBRARY mupdf-third)
 add_library(mupdf INTERFACE)
-target_include_directories(mupdf INTERFACE ${MUPDF_INCLUDE_DIR})
-target_link_libraries(mupdf INTERFACE ${MUPDF_LIBRARY})
-if(MUPDF_THIRD_LIBRARY)
-    target_link_libraries(mupdf INTERFACE ${MUPDF_THIRD_LIBRARY})
-endif()
-foreach(lib freetype harfbuzz openjp2 jbig2dec jpeg z mujs gumbo)
-    find_library(MUPDF_DEP_${lib} ${lib})
-    if(MUPDF_DEP_${lib})
-        target_link_libraries(mupdf INTERFACE ${MUPDF_DEP_${lib}})
+if(MINGW)
+    # MSYS2 ships MuPDF as a DLL with a working pkg-config file.
+    pkg_check_modules(MUPDF REQUIRED IMPORTED_TARGET mupdf)
+    target_link_libraries(mupdf INTERFACE PkgConfig::MUPDF)
+else()
+    # Linux distributions ship static libraries and an unreliable pkg-config
+    # file, so the library and what it was built with are found by hand.
+    find_path(MUPDF_INCLUDE_DIR mupdf/fitz.h REQUIRED)
+    find_library(MUPDF_LIBRARY mupdf REQUIRED)
+    find_library(MUPDF_THIRD_LIBRARY mupdf-third)
+    target_include_directories(mupdf INTERFACE ${MUPDF_INCLUDE_DIR})
+    target_link_libraries(mupdf INTERFACE ${MUPDF_LIBRARY})
+    if(MUPDF_THIRD_LIBRARY)
+        target_link_libraries(mupdf INTERFACE ${MUPDF_THIRD_LIBRARY})
     endif()
-endforeach()
+    foreach(lib freetype harfbuzz openjp2 jbig2dec jpeg z mujs gumbo)
+        find_library(MUPDF_DEP_${lib} ${lib})
+        if(MUPDF_DEP_${lib})
+            target_link_libraries(mupdf INTERFACE ${MUPDF_DEP_${lib}})
+        endif()
+    endforeach()
+endif()
 
 add_library(engine STATIC
     src/engine/Types.h
