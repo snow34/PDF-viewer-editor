@@ -2,6 +2,7 @@
 #pragma once
 
 #include "engine/Document.h"
+#include "preflight/Types.h"
 
 #include <QObject>
 #include <QPointF>
@@ -14,6 +15,7 @@ public:
     // Called from the UI thread: renders older than this id are skipped.
     void setLatestRequest(int id) { m_latest.store(id); }
     void setLatestSearch(int id) { m_latestSearch.store(id); }
+    void setLatestPreflight(int id) { m_latestPreflight.store(id); }
 
 public slots:
     void openDocument(const QString &path);
@@ -23,6 +25,9 @@ public slots:
     // Searches every page; a newer search (higher id) cancels this one.
     void search(const QString &text, int rotation, int searchId);
     void inspect(int page, QPointF point, int rotation);
+    // `standard` is a preflight::Standard. A higher id set with
+    // setLatestPreflight stops a running check.
+    void runPreflight(int standard, int checkId);
 
 signals:
     void documentOpened(const engine::DocumentInfo &info, const QList<QSizeF> &pageSizes);
@@ -31,9 +36,12 @@ signals:
     void thumbnailRendered(const engine::PageRender &render, int generation);
     void searchFinished(const QString &text, const QList<engine::SearchHit> &hits, int searchId);
     void objectsFound(int page, const QList<engine::ObjectInfo> &objects);
+    void preflightProgress(int page, int pageCount, int checkId);
+    void preflightFinished(const preflight::Report &report, int checkId);
 
 private:
     std::unique_ptr<engine::Document> m_doc;
     std::atomic<int> m_latest{ 0 };
     std::atomic<int> m_latestSearch{ 0 };
+    std::atomic<int> m_latestPreflight{ 0 };
 };

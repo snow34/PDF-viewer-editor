@@ -25,7 +25,8 @@ The owner prefers to be asked clarifying questions rather than have things assum
 
 ## State
 
-Phase 1 (viewer + output preview) is partly done. Phases 2-4 are not started.
+Phase 1 (viewer + output preview) is mostly done. Phase 2: verification is
+done, fix-ups are not started. Phases 3-4 are not started.
 
 | Platform | How it is built | Versions seen in CI |
 |---|---|---|
@@ -49,6 +50,8 @@ Tag pushes also publish, but the Claude cloud sandbox cannot push tags (403).
 - Separations list with per-plate show/hide; single plate shown as grey.
 - Ink % under cursor, total area coverage, 1/3x3/5x5 sampling.
 - Coverage highlight above a limit.
+- PDF/X preflight (verification only): five standards, clickable findings,
+  PDF/HTML/JSON report, command-line mode. See "Preflight" below.
 - Pages panel with thumbnails (requested one at a time so they never queue
   ahead of the page being viewed).
 - Object Inspector: click a point, list objects under it (bounding-box test,
@@ -139,9 +142,15 @@ src/ui/
                      non-dockable QDockWidget ("outputPreview") owned by MainWindow:
                      the owner wants it as a separate draggable window
   ProfileDialog      profile management
+  PreflightPanel     standard selector, Check/Stop, findings tree, report export
+src/preflight/       compiled into the engine library
+  Types.h, Report.cpp  Standard, Finding, Report; HTML and JSON export
+  Preflight.cpp        the checker (see "Preflight")
+src/engine/MuPdfUtil.h  private MuPDF helpers shared by Document.cpp and Preflight.cpp
   Customization      user-editable theme.qss + layout.json, file watcher (see below)
 tests/
   test_engine.cpp    ink values, overprint/knockout, boxes, PDF/X detection, profiles
+  test_preflight.cpp one clean file, one file per violation: exact rule ids and bounds
   test_ui.cpp        drives the real MainWindow
 ```
 
@@ -161,6 +170,77 @@ Everything else derives from that buffer on the UI thread:
 Consequence: the simulation profile changes appearance only, never ink numbers.
 Overprint cannot be switched off (MuPDF applies it when the target has
 separations). Both are deliberate; the owner has been told.
+
+## Preflight
+
+`preflight::run(Document&, Standard, Options, progress)` in
+`src/preflight/Preflight.cpp`. It must run on the thread that owns the
+Document (`RenderWorker::runPreflight`). Two sources of facts:
+
+1. **PDF object structure** (`pdf_*` API): identification, version, encryption,
+   output intent, metadata, catalog features, page boxes, annotations, font
+   embedding (`collectUnembeddedFonts` walks resources through forms and
+   patterns), and one pass over every object in the xref (`checkAllObjects`)
+   for filters, PostScript, OPI, soft-mask images, transfer functions.
+2. **A recording device** (`PageDevice`, same technique as the inspector) run
+   over each page's contents: colour space of every fill, stroke, text, image
+   and gradient; opacity, blend modes, soft masks, groups; image resolution;
+   where non-embedded fonts are used. This is what gives findings a location.
+
+Finding bounds are view points **at rotation 0**; `MainWindow::toCurrentRotation`
+maps them to the current view. At most 10 findings per rule per page are
+listed; the last one says how many more there are (`Checker::closePage`).
+
+PDF names are compared as text (`isName`, `pdf_dict_gets`) because the set of
+built-in `PDF_NAME(...)` constants differs between MuPDF versions.
+
+### Rules
+
+| Rule id | Severity | Applies to |
+|---|---|---|
+| `id.missing`, `id.mismatch`, `id.conformance` | Error | all (X-1a/X-3: Info dict; X-4: XMP) |
+| `file.encrypted`, `file.damaged`, `file.damagedPage`, `file.notPdf` | Error | all |
+| `file.version` | Warning | header version above 1.3 (2001/2002), 1.4 (2003), 1.6 (X-4) |
+| `intent.missing`, `intent.multiple`, `intent.identifier`, `intent.profile`, `intent.profileInvalid`, `intent.profileClass` | Error | all (embedded profile mandatory for X-4; registry name accepted otherwise) |
+| `intent.profileSpace` | Error | X-1a (profile must be CMYK) |
+| `meta.title`, `meta.creationDate`, `meta.modDate`, `meta.trapped` | Error | all (Info dict or XMP) |
+| `meta.xmp` | Error | X-4 |
+| `box.mediaMissing`, `box.trimMissing`, `box.trimAndArt`, `box.nesting` | Error | all |
+| `font.notEmbedded` | Error | all |
+| `color.rgb`, `color.lab`, `color.icc` | Error | X-1a |
+| `color.spotAlternate` | Warning | X-1a |
+| `color.deviceRgb`, `color.deviceCmyk` | Error | X-3, X-4 (device colour not matching the intent) |
+| `transparency.opacity`, `.blendMode`, `.softMask`, `.group`, `.softMaskImage` | Error | X-1a, X-3 |
+| `annot.inside` | Error | all (TrapNet and PrinterMark exempt) |
+| `forbidden.javascript`, `.postscript`, `.opi`, `.transferFunction` | Error | all |
+| `forbidden.layers`, `forbidden.jpeg2000` | Error | X-1a, X-3 |
+| `forbidden.action`, `.alternates`, `.embeddedFiles`, `.lzw`, `.jbig2` | Warning | see code |
+| `image.lowResolution` | Warning | all; not a PDF/X rule (`Options::minImagePpi`, default 150) |
+
+### Not confirmed against ISO 15930 (the texts were not available)
+
+Everything above was written from memory of the standards. Treat these as the
+least certain, which is why most are warnings:
+
+- `file.version`: whether a higher header version alone is a violation.
+- `forbidden.lzw`, `forbidden.jbig2`: which editions forbid which filters.
+- `forbidden.action`, `forbidden.embeddedFiles`, `forbidden.alternates`: exact scope.
+- `color.spotAlternate`: restrictions on alternate spaces.
+- `meta.*` for X-4: which XMP properties are mandatory.
+- `transparency.group`: reported as an error for any group MuPDF opens.
+- Not checked at all: rendering intents, halftones (`HTP`), DeviceN details,
+  overprint mode rules, X-4 layer (OCG) configuration rules, trap networks,
+  `OutputCondition` vs registry contents, X-4p/X-5 external profiles, X-6.
+
+Validation so far: the committed test files, and a PDF/X-3:2002 file made by
+Ghostscript (`gs -dPDFX` with a customised `PDFX_def.ps`) which passes with no
+findings. The owner has Acrobat Pro and PitStop and was asked to compare
+results on real files; adjust rules from that feedback.
+
+Not covered by a committed test: output intents with an embedded profile
+(`intent.profileClass`, `intent.profileSpace`), because no freely
+redistributable CMYK profile is in the repo. Checked by hand with the
+Ghostscript file only.
 
 ## Developer mode (GUI customisation)
 
@@ -225,10 +305,10 @@ rendered area, y down, view rotation already applied (`viewMatrix` in
 
 1. Finish phase 1 (list above). Suggested first: the continuous-scroll /
    visible-region rendering redesign.
-2. Phase 2 — `src/preflight/`: rule engine, one check per ISO clause, profiles
-   for PDF/X-1a:2001/2003, X-3:2002/2003, X-4; report panel with jump-to-object;
-   fix-ups with before/after preview (output intent, RGB/Lab -> CMYK, spot
-   remap, font embedding, page boxes, transparency flattening, PDF/X metadata).
+2. Phase 2 remainder — fix-ups with before/after preview (output intent,
+   RGB/Lab -> CMYK, spot remap, font embedding, page boxes, transparency
+   flattening, PDF/X metadata). These write files, so they need the safe-save
+   rules listed under phase 3 first. Also PDF/X-6.
 3. Phase 3 — `src/edit/`: page operations and object tools. Safety rules:
    every edit on MuPDF's undo journal; rewrite only touched pages' content
    streams; never save in place silently; after save re-open, run a qpdf

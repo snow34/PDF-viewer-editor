@@ -26,7 +26,7 @@ q /GS0 gs 0 0 1 0 k 60 60 80 80 re f Q
 """
 
 def write(path, objs, trailer_extra=b""):
-    out = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
+    out = bytearray(b"%PDF-1.3\n%\xe2\xe3\xcf\xd3\n")
     offsets = []
     for i, body in enumerate(objs, 1):
         offsets.append(len(out))
@@ -109,3 +109,75 @@ write(out_dir + "/objects.pdf", [
     b"[/Separation /PANTONE#20185#20C /DeviceCMYK 7 0 R]",
     b"<< /FunctionType 2 /Domain [0 1] /C0 [0 0 0 0] /C1 [0 0.91 0.76 0] /N 1 >>",
 ])
+
+
+# ---------------------------------------------------------------- preflight
+# x1a_ok.pdf passes every PDF/X-1a:2001 check the app makes. Every other
+# x1a_*.pdf is the same file with exactly one thing wrong.
+
+def pdfx(name, content=b"0 0 0 1 k 50 50 200 200 re f", boxes=b"/TrimBox [10 10 290 290]",
+         resources=b"", page_extra=b"", catalog_extra=b"", intent=True,
+         info=b"/Title (Test) /CreationDate (D:20240101000000Z) /ModDate (D:20240101000000Z) /Trapped /False",
+         marker=b"/GTS_PDFXVersion (PDF/X-1:2001) /GTS_PDFXConformance (PDF/X-1a:2001)", extra=()):
+    objs = [
+        b"<< /Type /Catalog /Pages 2 0 R " + (INTENT if intent else b"") + b" " + catalog_extra + b" >>",
+        PAGES,
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] " + boxes + b" /Contents 4 0 R"
+        b" /Resources << " + resources + b" >> " + page_extra + b" >>",
+        stream(content),
+        b"<< " + info + b" " + marker + b" >>",
+    ] + list(extra)
+    write(out_dir + "/" + name, objs, b"/Info 5 0 R")
+
+
+pdfx("x1a_ok.pdf")
+pdfx("x1a_rgb.pdf", content=b"0 0 0 1 k 50 50 200 200 re f 1 0 0 rg 100 100 50 50 re f")
+pdfx("x1a_no_trim.pdf", boxes=b"")
+pdfx("x1a_trim_and_art.pdf", boxes=b"/TrimBox [10 10 290 290] /ArtBox [20 20 280 280]")
+pdfx("x1a_trim_outside.pdf", boxes=b"/TrimBox [10 10 290 290] /BleedBox [20 20 280 280]")
+pdfx("x1a_opacity.pdf", content=b"0 0 0 1 k 50 50 200 200 re f /GS0 gs 1 0 0 0 k 100 100 50 50 re f",
+     resources=b"/ExtGState << /GS0 << /Type /ExtGState /ca 0.5 >> >>")
+pdfx("x1a_font.pdf", content=b"BT /F1 12 Tf 0 0 0 1 k 30 250 Td (Hello Prepress) Tj ET",
+     resources=b"/Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >>")
+pdfx("x1a_annot.pdf", page_extra=b"/Annots [<< /Type /Annot /Subtype /Text /Rect [100 100 120 120]"
+                                 b" /Contents (note) >>]")
+pdfx("x1a_annot_outside.pdf", boxes=b"/TrimBox [50 50 250 250]",
+     page_extra=b"/Annots [<< /Type /Annot /Subtype /Text /Rect [5 5 25 25] /Contents (note) >>]")
+pdfx("x1a_no_meta.pdf", info=b"/CreationDate (D:20240101000000Z) /ModDate (D:20240101000000Z)")
+pdfx("x1a_no_intent.pdf", intent=False)
+pdfx("x1a_javascript.pdf", catalog_extra=b"/OpenAction << /S /JavaScript /JS (app.alert\\(1\\)) >>")
+pdfx("x1a_lowres.pdf", content=b"q 144 0 0 144 30 120 cm /Im1 Do Q", resources=b"/XObject << /Im1 6 0 R >>",
+     extra=[b"<< /Type /XObject /Subtype /Image /Width 20 /Height 20 /ColorSpace /DeviceGray"
+            b" /BitsPerComponent 8 /Length 400 >>\nstream\n" + b"\x80" * 400 + b"\nendstream"])
+
+# x4_no_profile.pdf: marked PDF/X-4 in XMP, 50 % opacity (allowed in X-4), but
+# the output intent has no embedded profile, which X-4 requires.
+XMP4 = (b'<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
+        b'<rdf:Description rdf:about="" xmlns:pdfxid="http://www.npes.org/pdfx/ns/id/"'
+        b' xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:xmp="http://ns.adobe.com/xap/1.0/"'
+        b' xmlns:pdf="http://ns.adobe.com/pdf/1.3/">'
+        b"<pdfxid:GTS_PDFXVersion>PDF/X-4</pdfxid:GTS_PDFXVersion>"
+        b'<dc:title><rdf:Alt><rdf:li xml:lang="x-default">Test</rdf:li></rdf:Alt></dc:title>'
+        b"<xmp:CreateDate>2024-01-01T00:00:00Z</xmp:CreateDate><xmp:ModifyDate>2024-01-01T00:00:00Z</xmp:ModifyDate>"
+        b"<pdf:Trapped>False</pdf:Trapped>"
+        b"</rdf:Description></rdf:RDF></x:xmpmeta>")
+write(out_dir + "/x4_no_profile.pdf", [
+    b"<< /Type /Catalog /Pages 2 0 R /Metadata 5 0 R " + INTENT + b" >>",
+    PAGES,
+    b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /TrimBox [10 10 290 290] /Contents 4 0 R"
+    b" /Resources << /ExtGState << /GS0 << /Type /ExtGState /ca 0.5 >> >> >> >>",
+    stream(b"/GS0 gs 0 0 0 1 k 50 50 200 200 re f"),
+    b"<< /Type /Metadata /Subtype /XML /Length %d >>\nstream\n" % len(XMP4) + XMP4 + b"\nendstream",
+])
+
+# x1a_two_pages.pdf: page 1 is clean, page 2 has an RGB square at (100,100) 50 x 50.
+write(out_dir + "/x1a_two_pages.pdf", [
+    b"<< /Type /Catalog /Pages 2 0 R " + INTENT + b" >>",
+    b"<< /Type /Pages /Kids [3 0 R 6 0 R] /Count 2 >>",
+    b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /TrimBox [10 10 290 290] /Contents 4 0 R >>",
+    stream(b"0 0 0 1 k 50 50 200 200 re f"),
+    b"<< /Title (Test) /CreationDate (D:20240101000000Z) /ModDate (D:20240101000000Z) /Trapped /False"
+    b" /GTS_PDFXVersion (PDF/X-1:2001) /GTS_PDFXConformance (PDF/X-1a:2001) >>",
+    b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /TrimBox [10 10 290 290] /Contents 7 0 R >>",
+    stream(b"1 0 0 rg 100 100 50 50 re f"),
+], b"/Info 5 0 R")

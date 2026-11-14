@@ -39,6 +39,8 @@ public:
     static QString systemMonitorProfile();
 
     static bool inspect(const QString &path, ProfileInfo *info, QString *error);
+    // The same for a profile held in memory; `info->path` stays empty.
+    static bool inspectData(const QByteArray &data, ProfileInfo *info);
     static QByteArray load(const QString &path);
 
     // Copies a profile into the app library. Returns the new path, or an

@@ -1,5 +1,7 @@
 #include "RenderWorker.h"
 
+#include "preflight/Preflight.h"
+
 #include <QSizeF>
 
 void RenderWorker::openDocument(const QString &path)
@@ -50,4 +52,16 @@ void RenderWorker::inspect(int page, QPointF point, int rotation)
 {
     if (m_doc)
         emit objectsFound(page, m_doc->objectsAt(page, point, rotation));
+}
+
+void RenderWorker::runPreflight(int standard, int checkId)
+{
+    if (!m_doc)
+        return;
+    const preflight::Report report =
+        preflight::run(*m_doc, preflight::Standard(standard), {}, [this, checkId](int page, int count) {
+            emit preflightProgress(page, count, checkId);
+            return checkId >= m_latestPreflight.load();
+        });
+    emit preflightFinished(report, checkId);
 }

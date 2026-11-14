@@ -4,6 +4,7 @@
 #include "engine/Compositor.h"
 #include "engine/ProfileLibrary.h"
 #include "engine/Types.h"
+#include "preflight/Types.h"
 
 #include <QHash>
 #include <QMainWindow>
@@ -11,6 +12,7 @@
 
 class OutputPreviewPanel;
 class PageView;
+class PreflightPanel;
 class QDockWidget;
 class RenderWorker;
 class QLabel;
@@ -39,6 +41,7 @@ signals:
     void requestThumbnail(int page, int size, int rotation, int generation);
     void requestSearch(const QString &text, int rotation, int searchId);
     void requestInspect(int page, QPointF point, int rotation);
+    void requestPreflight(int standard, int checkId);
 
 protected:
     void resizeEvent(QResizeEvent *event) override;
@@ -68,6 +71,9 @@ private:
     void stepSearch(int direction);
     void showCurrentHit();
     void onObjectsFound(int page, const QList<engine::ObjectInfo> &objects);
+    void startPreflight();
+    void showFinding(const preflight::Finding &finding);
+    QRectF toCurrentRotation(const QRectF &rect, int page) const;
     void goToPage(int page);
     void zoomBy(int steps);
     void setFit(bool fit);
@@ -104,6 +110,14 @@ private:
 
     QDockWidget *m_inspectorDock;
     QTreeWidget *m_inspector;
+
+    QDockWidget *m_preflightDock;
+    PreflightPanel *m_preflight;
+    int m_preflightId = 0;
+    // Frame to draw once the page it belongs to has been rendered
+    // (rotation 0 coordinates).
+    int m_pendingFramePage = -1;
+    QRectF m_pendingFrame;
 
     QToolBar *m_searchBar;
     QLineEdit *m_searchField;

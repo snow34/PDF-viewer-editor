@@ -16,7 +16,7 @@ const char kDefaultLayout[] = R"({
     "view.previousPage", "pageNumber", "view.nextPage", "-",
     "view.zoomOut", "view.zoomIn", "view.fitPage", "-",
     "view.rotateLeft", "view.rotateRight", "-",
-    "edit.find", "tools.profiles"
+    "edit.find", "tools.preflight", "tools.profiles"
   ],
   "menus": [
     { "title": "&File", "items": ["file.open", "file.recent", "file.properties", "-", "file.quit"] },
@@ -24,8 +24,9 @@ const char kDefaultLayout[] = R"({
     { "title": "&View", "items": ["view.zoomIn", "view.zoomOut", "view.actualSize", "view.fitPage", "-",
                                   "view.rotateLeft", "view.rotateRight", "-",
                                   "view.previousPage", "view.nextPage"] },
-    { "title": "&Tools", "items": ["tools.profiles"] },
-    { "title": "&Window", "items": ["window.outputPreview", "window.thumbnails", "window.inspector"] },
+    { "title": "&Tools", "items": ["tools.preflight", "tools.profiles"] },
+    { "title": "&Window", "items": ["window.outputPreview", "window.thumbnails", "window.inspector",
+                                    "window.preflight"] },
     { "title": "&Help", "items": ["help.about"] }
   ],
   "shortcuts": {

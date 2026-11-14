@@ -4,39 +4,16 @@
 #include <QRegularExpression>
 #include <QSizeF>
 
-#include <mupdf/fitz.h>
-#include <mupdf/pdf.h>
+#include "MuPdfUtil.h"
 
 #include <cmath>
 #include <cstring>
 
 namespace engine {
 
+using namespace mu;
+
 namespace {
-
-QRectF toQRect(fz_rect r)
-{
-    return QRectF(QPointF(r.x0, r.y0), QPointF(r.x1, r.y1)).normalized();
-}
-
-QString pdfText(fz_context *ctx, pdf_obj *obj)
-{
-    if (!obj)
-        return {};
-    if (pdf_is_name(ctx, obj))
-        return QString::fromUtf8(pdf_to_name(ctx, obj));
-    if (pdf_is_string(ctx, obj))
-        return QString::fromUtf8(pdf_to_text_string(ctx, obj));
-    return {};
-}
-
-// Maps page space to the rotated view with its top-left corner at 0, 0.
-fz_matrix viewMatrix(fz_rect bounds, int rotation)
-{
-    const fz_matrix m = fz_rotate(float(rotation));
-    const fz_rect r = fz_transform_rect(bounds, m);
-    return fz_concat(m, fz_translate(-r.x0, -r.y0));
-}
 
 // A device that paints nothing and records what lies under one point.
 struct InspectDevice {
@@ -45,23 +22,6 @@ struct InspectDevice {
     fz_matrix view;       // page space -> view
     QList<ObjectInfo> *found;
 };
-
-QString colorSpaceLabel(fz_context *ctx, fz_colorspace *cs)
-{
-    if (!cs)
-        return QStringLiteral("None");
-    QString name = QString::fromUtf8(fz_colorspace_name(ctx, cs));
-    const auto type = fz_colorspace_type(ctx, cs);
-    if (type == FZ_COLORSPACE_SEPARATION) {
-        QStringList inks;
-        for (int i = 0; i < fz_colorspace_n(ctx, cs); ++i)
-            inks << QString::fromUtf8(fz_colorspace_colorant(ctx, cs, i));
-        name = QStringLiteral("%1 (%2)")
-                   .arg(inks.size() > 1 ? QStringLiteral("DeviceN") : QStringLiteral("Separation"),
-                        inks.join(QStringLiteral(", ")));
-    }
-    return name;
-}
 
 QStringList colorValues(fz_context *ctx, fz_colorspace *cs, const float *color)
 {
@@ -278,6 +238,10 @@ void Document::readInfo(const QString &path)
 
         // PDF/X-1a and PDF/X-3 identify themselves in the Info dictionary.
         infoVersion = pdfText(ctx, pdf_dict_gets(ctx, docInfo, "GTS_PDFXVersion"));
+        // PDF/X-1a:2001 files say "PDF/X-1:2001" there and name the level separately.
+        const QString conformance = pdfText(ctx, pdf_dict_gets(ctx, docInfo, "GTS_PDFXConformance"));
+        if (!conformance.isEmpty())
+            infoVersion = conformance;
 
         // PDF/X-4 and later identify themselves in XMP metadata only.
         pdf_obj *metadata = pdf_dict_get(ctx, root, PDF_NAME(Metadata));

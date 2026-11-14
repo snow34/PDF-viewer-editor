@@ -7,8 +7,8 @@ profile.
 
 It is open source (AGPL-3.0) and built with C++, Qt 6 and MuPDF.
 
-> **Status:** early version. Viewing and Output Preview work. Checking files
-> against the PDF/X standard and editing are planned but not built yet.
+> **Status:** early version. Viewing, Output Preview and PDF/X checking work.
+> Fixing problems automatically and editing are planned but not built yet.
 > Available for Windows (installer) and Linux (build it yourself). No macOS
 > version yet.
 
@@ -33,6 +33,7 @@ It is open source (AGPL-3.0) and built with C++, Qt 6 and MuPDF.
 | Preview the paper colour | Set **Display** to *Absolute (simulate paper white)*. |
 | See trim and bleed | Tick **Show page boxes**. Trim is green, bleed is blue, art is red. The trim size in mm is shown bottom right. |
 | Check whether a file says it is PDF/X | Look at the bottom left of the window, or open **File > Properties**. |
+| Check whether a file really is PDF/X | **Tools > Preflight** (Ctrl+Shift+X). See below. |
 
 ### The Output Preview window
 
@@ -43,7 +44,8 @@ remembers where you left it. Close it with its ✕ and bring it back with
 
 ### Panels
 
-**Pages** and **Object Inspector** are panels at the sides of the window. You
+**Pages**, **Object Inspector** and **Preflight** are panels at the sides of the
+window (the last two share the right side as tabs). You
 can close them, bring them back from the **Window** menu, or drag them by
 their title to another side or out into their own window.
 
@@ -60,6 +62,52 @@ their title to another side or out into their own window.
   the font and a stand-in is shown. A printer may reject such a file.
 - If no CMYK profile is selected, colours on screen are only approximate and
   the Output Preview window says so. Ink percentages are still correct.
+
+## How to check a file against PDF/X (Preflight)
+
+1. Open the PDF.
+2. Choose **Tools > Preflight**, or open the **Preflight** tab on the right.
+3. The standard the file claims is already selected. Pick another one if you
+   want: PDF/X-1a:2001, PDF/X-1a:2003, PDF/X-3:2002, PDF/X-3:2003 or PDF/X-4.
+4. Press **Check**. You get **Passed** or **Failed** and a list of problems,
+   grouped by kind, each with its page number.
+5. Click a problem. The app goes to that page and puts a pink frame around
+   the object. The full explanation appears under the list.
+6. **Save report…** writes the result as a PDF, a web page, or a JSON file
+   for other programs.
+
+What is checked:
+
+| Group | Examples |
+|---|---|
+| Identification | Is the file marked as the standard you chose? |
+| Output intent | Is there exactly one, does it name the printing condition, is the profile a printer profile? |
+| Metadata | Title, creation and change date, "Trapped" set to True or False |
+| Page boxes | TrimBox or ArtBox on every page, boxes inside one another correctly |
+| Fonts | Every font embedded |
+| Colour | PDF/X-1a: only CMYK, grey and spot colours. PDF/X-3 and X-4: no plain (device) RGB when printing in CMYK |
+| Transparency | Not allowed in PDF/X-1a and PDF/X-3; allowed in PDF/X-4 |
+| Annotations | No comments, links or form fields inside the printed area |
+| Forbidden features | JavaScript, embedded PostScript, layers (before X-4), JPEG 2000 (before X-4) and others |
+| Image resolution | A warning for images below 150 ppi (not a PDF/X rule, but worth knowing) |
+
+Errors make the file fail. Warnings do not: they are things to look at.
+
+**Please read:** this is the app's own check, not a certified validation. It
+was written without the official ISO standard documents, and a few rules are
+reported only as warnings because their exact wording is not confirmed. A
+file that passes here has no problem this app knows how to find; your printer
+may still check more. If you also have Acrobat Preflight or PitStop, compare
+the results and report differences.
+
+The check can also run without the window, for use in scripts:
+
+```bash
+prepresspdf --preflight X-4 --report result.json file.pdf
+```
+
+It ends with exit code 0 if the file passed, 1 if it failed, 2 if it could not
+be checked.
 
 ## How to add ICC profiles
 
@@ -173,9 +221,8 @@ them correctly.
 
 1. **Rest of the viewer:** continuous scrolling through all pages, faster
    display of very large sheets, a macOS version.
-2. **Preflight:** check files against PDF/X-1a, X-3 and X-4, list the
-   problems, and fix them (convert colours, embed fonts, set page boxes,
-   set the output intent).
+2. **Preflight fix-ups:** repair what the check finds (convert colours,
+   embed fonts, set page boxes, set the output intent), and PDF/X-6.
 3. **Editing:** move, delete and recolour objects; reorder and rotate pages —
    with checks after every save so the file is never damaged.
 4. **Text editing.**

@@ -39,6 +39,9 @@ add_library(engine STATIC
     src/engine/Document.cpp src/engine/Document.h
     src/engine/Compositor.cpp src/engine/Compositor.h
     src/engine/ProfileLibrary.cpp src/engine/ProfileLibrary.h
+    src/engine/MuPdfUtil.h
+    src/preflight/Types.h src/preflight/Report.cpp
+    src/preflight/Preflight.cpp src/preflight/Preflight.h
 )
 target_include_directories(engine PUBLIC src)
 target_link_libraries(engine PUBLIC Qt6::Gui PRIVATE mupdf PkgConfig::LCMS2)
@@ -50,6 +53,7 @@ add_library(ui STATIC
     src/ui/Customization.cpp src/ui/Customization.h
     src/ui/MainWindow.cpp src/ui/MainWindow.h
     src/ui/PageView.cpp src/ui/PageView.h
+    src/ui/PreflightPanel.cpp src/ui/PreflightPanel.h
     src/ui/OutputPreviewPanel.cpp src/ui/OutputPreviewPanel.h
     src/ui/ProfileDialog.cpp src/ui/ProfileDialog.h
     src/ui/RenderWorker.cpp src/ui/RenderWorker.h
@@ -75,3 +79,9 @@ target_link_libraries(test_ui PRIVATE ui Qt6::Test)
 target_compile_definitions(test_ui PRIVATE TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data")
 add_test(NAME test_ui COMMAND test_ui)
 set_tests_properties(test_ui PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+add_executable(test_preflight tests/test_preflight.cpp)
+target_link_libraries(test_preflight PRIVATE engine Qt6::Test)
+target_compile_definitions(test_preflight PRIVATE TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data")
+add_test(NAME test_preflight COMMAND test_preflight)
+set_tests_properties(test_preflight PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

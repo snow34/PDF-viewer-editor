@@ -2,6 +2,7 @@
 
 #include "OutputPreviewPanel.h"
 #include "PageView.h"
+#include "PreflightPanel.h"
 #include "ProfileDialog.h"
 #include "RenderWorker.h"
 #include "engine/Compositor.h"
@@ -48,6 +49,7 @@ MainWindow::MainWindow(bool safeMode) : m_safeMode(safeMode)
     qRegisterMetaType<QList<QSizeF>>();
     qRegisterMetaType<QList<engine::SearchHit>>();
     qRegisterMetaType<QList<engine::ObjectInfo>>();
+    qRegisterMetaType<preflight::Report>();
 
     setWindowTitle(QApplication::applicationDisplayName());
     resize(1200, 820);
@@ -99,6 +101,19 @@ MainWindow::MainWindow(bool safeMode) : m_safeMode(safeMode)
     new QTreeWidgetItem(m_inspector, { tr("Click on the page to inspect what is there.") });
     m_inspector->setFirstColumnSpanned(0, QModelIndex(), true);
 
+    m_preflight = new PreflightPanel;
+    m_preflightDock = new QDockWidget(tr("Preflight"), this);
+    m_preflightDock->setObjectName(QStringLiteral("preflightPanel"));
+    m_preflightDock->setWidget(m_preflight);
+    addDockWidget(Qt::RightDockWidgetArea, m_preflightDock);
+    tabifyDockWidget(m_inspectorDock, m_preflightDock);
+    m_inspectorDock->raise();
+    connect(m_preflight, &PreflightPanel::checkRequested, this, &MainWindow::startPreflight);
+    connect(m_preflight, &PreflightPanel::stopRequested, this, [this] {
+        m_worker->setLatestPreflight(m_preflightId + 1); // the running check sees a newer id and stops
+    });
+    connect(m_preflight, &PreflightPanel::findingActivated, this, &MainWindow::showFinding);
+
     m_searchBar = new QToolBar(tr("Search"), this);
     m_searchBar->setObjectName(QStringLiteral("searchBar"));
     m_searchBar->setMovable(false);
@@ -145,6 +160,17 @@ MainWindow::MainWindow(bool safeMode) : m_safeMode(safeMode)
     connect(m_worker, &RenderWorker::thumbnailRendered, this, &MainWindow::onThumbnail);
     connect(m_worker, &RenderWorker::searchFinished, this, &MainWindow::onSearchFinished);
     connect(m_worker, &RenderWorker::objectsFound, this, &MainWindow::onObjectsFound);
+    connect(this, &MainWindow::requestPreflight, m_worker, &RenderWorker::runPreflight);
+    connect(m_worker, &RenderWorker::preflightProgress, this, [this](int page, int count, int id) {
+        if (id == m_preflightId)
+            m_preflight->setProgress(page, count);
+    });
+    connect(m_worker, &RenderWorker::preflightFinished, this, [this](const preflight::Report &report, int id) {
+        if (id != m_preflightId)
+            return; // belongs to a document that has been closed since
+        m_preflight->setReport(report);
+        updateBanner();
+    });
     connect(m_worker, &RenderWorker::openFailed, this, [this](const QString &path, const QString &error) {
         QMessageBox::warning(this, windowTitle(),
                              tr("Could not open %1\n\n%2").arg(QDir::toNativeSeparators(path), error));
@@ -261,6 +287,16 @@ void MainWindow::buildActions()
         m_items.insert(std::get<0>(panel), toggle);
         m_itemHelp.append({ std::get<0>(panel), std::get<2>(panel) });
     }
+
+    connect(addItem(QStringLiteral("tools.preflight"), tr("Pre&flight"),
+                    tr("Check the file against a PDF/X standard"), QKeySequence(tr("Ctrl+Shift+X"))),
+            &QAction::triggered, this, [this] {
+                m_preflightDock->show();
+                m_preflightDock->raise();
+                startPreflight();
+            });
+    m_items.insert(QStringLiteral("window.preflight"), m_preflightDock->toggleViewAction());
+    m_itemHelp.append({ QStringLiteral("window.preflight"), tr("Show or hide the Preflight panel") });
 
     connect(addItem(QStringLiteral("help.about"), tr("&About Prepress PDF"), tr("Version and licences")),
             &QAction::triggered, this, [this] {
@@ -474,6 +510,10 @@ void MainWindow::onOpened(const engine::DocumentInfo &info, const QList<QSizeF> 
     m_searchStatus->clear();
     m_view->setSearchHits({}, {});
     m_view->setSelection({});
+    m_pendingFramePage = -1;
+    m_worker->setLatestPreflight(++m_preflightId); // stops a check of the previous document
+    m_preflight->setRunning(false);
+    m_preflight->setDocument(info.path, info.pdfxVersion);
     setWindowTitle(QStringLiteral("%1 – %2").arg(QFileInfo(info.path).fileName(),
                                                  QApplication::applicationDisplayName()));
 
@@ -675,6 +715,41 @@ void MainWindow::onObjectsFound(int page, const QList<engine::ObjectInfo> &objec
     m_inspector->resizeColumnToContents(0);
 }
 
+void MainWindow::startPreflight()
+{
+    if (m_info.pageCount == 0)
+        return;
+    m_worker->setLatestPreflight(++m_preflightId);
+    m_preflight->setRunning(true);
+    emit requestPreflight(int(m_preflight->standard()), m_preflightId);
+}
+
+QRectF MainWindow::toCurrentRotation(const QRectF &r, int page) const
+{
+    const QSizeF size = m_sizes.value(page); // unrotated
+    switch (m_rotation) {
+    case 90: return QRectF(size.height() - r.bottom(), r.left(), r.height(), r.width());
+    case 180: return QRectF(size.width() - r.right(), size.height() - r.bottom(), r.width(), r.height());
+    case 270: return QRectF(r.top(), size.width() - r.right(), r.height(), r.width());
+    default: return r;
+    }
+}
+
+void MainWindow::showFinding(const preflight::Finding &finding)
+{
+    if (finding.page < 0) {
+        m_view->setSelection({});
+        return; // concerns the whole document; nothing to point at
+    }
+    if (finding.page != m_page) {
+        m_pendingFramePage = finding.page;
+        m_pendingFrame = finding.bounds;
+        goToPage(finding.page); // the frame is drawn when the page arrives
+        return;
+    }
+    m_view->setSelection(finding.bounds.isValid() ? toCurrentRotation(finding.bounds, m_page) : QRectF());
+}
+
 void MainWindow::goToPage(int page)
 {
     if (m_info.pageCount == 0)
@@ -754,6 +829,10 @@ void MainWindow::onRendered(const engine::PageRender &render, int requestId)
     recomposite();
     if (m_currentHit >= 0 && m_currentHit < m_hits.size() && m_hits.at(m_currentHit).page == m_page)
         showCurrentHit();
+    if (m_pendingFramePage == m_page) {
+        m_view->setSelection(m_pendingFrame.isValid() ? toCurrentRotation(m_pendingFrame, m_page) : QRectF());
+        m_pendingFramePage = -1;
+    }
 
     if (!m_screenshot.isEmpty()) {
         const QString file = m_screenshot;
@@ -824,8 +903,16 @@ void MainWindow::updateBanner()
         return;
     }
     QStringList parts;
-    parts << (m_info.pdfxVersion.isEmpty() ? tr("Not marked as PDF/X")
-                                           : tr("Claims %1 (not verified)").arg(m_info.pdfxVersion));
+    if (m_preflight->hasReport() && !m_preflight->report().cancelled) {
+        const preflight::Report &r = m_preflight->report();
+        const QString name = preflight::standardName(r.standard);
+        parts << (r.errors() == 0 ? tr("%1 check: passed").arg(name)
+                  : r.errors() == 1 ? tr("%1 check: 1 error").arg(name)
+                                    : tr("%1 check: %2 errors").arg(name).arg(r.errors()));
+    } else {
+        parts << (m_info.pdfxVersion.isEmpty() ? tr("Not marked as PDF/X")
+                                               : tr("Claims %1 (not verified)").arg(m_info.pdfxVersion));
+    }
     if (m_info.outputIntents.isEmpty()) {
         parts << tr("No output intent");
     } else {

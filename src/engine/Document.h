@@ -36,6 +36,11 @@ public:
     // points), topmost first. Clipping is not taken into account.
     QList<ObjectInfo> objectsAt(int page, QPointF point, int rotation = 0);
 
+    // For engine-side code only (the preflight checker); the UI never
+    // touches MuPDF.
+    fz_context *context() const { return m_ctx; }
+    fz_document *handle() const { return m_doc; }
+
 private:
     Document() = default;
     void readInfo(const QString &path);

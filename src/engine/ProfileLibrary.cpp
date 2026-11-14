@@ -156,6 +156,24 @@ bool ProfileLibrary::inspect(const QString &path, ProfileInfo *info, QString *er
     return true;
 }
 
+bool ProfileLibrary::inspectData(const QByteArray &data, ProfileInfo *info)
+{
+    cmsHPROFILE p = data.isEmpty()
+                        ? nullptr
+                        : cmsOpenProfileFromMem(data.constData(), cmsUInt32Number(data.size()));
+    if (!p)
+        return false;
+    if (info) {
+        wchar_t text[256] = L"";
+        cmsGetProfileInfo(p, cmsInfoDescription, "en", "US", text, 256);
+        info->description = QString::fromWCharArray(text).trimmed();
+        info->colorSpace = colorSpaceName(cmsGetColorSpace(p));
+        info->deviceClass = deviceClassName(cmsGetDeviceClass(p));
+    }
+    cmsCloseProfile(p);
+    return true;
+}
+
 QByteArray ProfileLibrary::load(const QString &path)
 {
     QFile f(path);

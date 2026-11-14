@@ -2,8 +2,12 @@
 // switch plates and the coverage highlight.
 #include "ui/MainWindow.h"
 #include "ui/PageView.h"
+#include "ui/PreflightPanel.h"
 
 #include <QCheckBox>
+#include <QComboBox>
+#include <QPushButton>
+#include <QSpinBox>
 #include <QDockWidget>
 #include <QLabel>
 #include <QLineEdit>
@@ -225,6 +229,107 @@ private slots:
         QTest::keyClicks(field, "nowhere");
         QTest::keyClick(field, Qt::Key_Return);
         QTRY_VERIFY(status->text().contains("was not found"));
+
+        window->openFile(QStringLiteral(TEST_DATA_DIR "/ink_patches.pdf"));
+        QTRY_VERIFY(window->windowTitle().startsWith("ink_patches.pdf"));
+        QTest::qWait(300);
+    }
+
+    void preflight()
+    {
+        auto *panel = window->findChild<PreflightPanel *>();
+        auto *result = window->findChild<QLabel *>(QStringLiteral("preflightResult"));
+        auto *tree = window->findChild<QTreeWidget *>(QStringLiteral("preflightFindings"));
+        auto *button = window->findChild<QPushButton *>(QStringLiteral("preflightCheck"));
+        auto *standard = window->findChild<QComboBox *>(QStringLiteral("preflightStandard"));
+        QVERIFY(panel && result && tree && button && standard);
+
+        window->openFile(QStringLiteral(TEST_DATA_DIR "/x1a_two_pages.pdf"));
+        QTRY_VERIFY(window->windowTitle().startsWith("x1a_two_pages.pdf"));
+        // The standard the file claims is preselected, and nothing is verified yet.
+        QTRY_COMPARE(standard->currentText(), QStringLiteral("PDF/X-1a:2001"));
+        QVERIFY(window->statusBar()->findChild<QLabel *>()->text().contains("not verified")
+                || window->findChildren<QLabel *>().size() > 0);
+        QVERIFY(!panel->hasReport());
+
+        button->click();
+        QTRY_VERIFY(panel->hasReport());
+        QVERIFY2(result->text().contains("Failed") && result->text().contains("1 error"), qPrintable(result->text()));
+        QCOMPARE(tree->topLevelItemCount(), 1);
+        QCOMPARE(tree->topLevelItem(0)->text(0), QStringLiteral("Colour"));
+        QTreeWidgetItem *finding = tree->topLevelItem(0)->child(0);
+        QVERIFY(finding->text(0).contains("RGB"));
+        QCOMPARE(finding->text(1), QStringLiteral("2"));
+        bool bannerUpdated = false;
+        for (QLabel *label : window->statusBar()->findChildren<QLabel *>())
+            bannerUpdated = bannerUpdated || label->text().contains("PDF/X-1a:2001 check: 1 error");
+        QVERIFY(bannerUpdated);
+
+        // Clicking the finding jumps to page 2 and frames the square at PDF (100..150, 100..150).
+        auto framed = [this](double x, double y) {
+            const QColor c = shown(x, y);
+            return c.red() > 200 && c.green() < 80 && c.blue() > 150; // the pink selection frame
+        };
+        auto *spin = window->findChild<QSpinBox *>();
+        QCOMPARE(spin->value(), 1);
+        tree->setCurrentItem(finding);
+        QTRY_COMPARE(spin->value(), 2);
+        auto *detail = window->findChild<QLabel *>(QStringLiteral("preflightDetail"));
+        QVERIFY(detail->text().contains("PDF/X-1a allows only CMYK, grey and spot colours"));
+        QVERIFY(detail->text().contains("Page 2") && detail->text().contains("color.rgb"));
+        QTRY_VERIFY(framed(100, 125)); // left edge of the square
+        QVERIFY(framed(150, 125));     // right edge
+        QVERIFY(!framed(125, 125));    // the inside stays red
+        if (qEnvironmentVariableIsSet("UI_SCREENSHOT")) {
+            window->findChild<QDockWidget *>(QStringLiteral("preflightPanel"))->raise();
+            QTest::qWait(100);
+            window->grab().save(qEnvironmentVariable("UI_SCREENSHOT") + ".preflight.png");
+        }
+
+        // The frame follows a rotated view: a quarter turn clockwise moves the
+        // square's left edge (PDF x = 100, view y 150..200) to view (100..150, 100).
+        for (QAction *a : window->actions())
+            if (a->text().remove('&') == QLatin1String("Rotate right"))
+                a->trigger();
+        tree->setCurrentItem(nullptr);
+        QTest::qWait(400);
+        tree->setCurrentItem(finding);
+        auto framedView = [this](double vx, double vy) {
+            const QColor c = canvas->grab().toImage().pixelColor(QPoint(12 + int(vx * zoom()), 12 + int(vy * zoom())));
+            return c.red() > 200 && c.green() < 80 && c.blue() > 150;
+        };
+        QTRY_VERIFY(framedView(125, 100)); // top edge of the turned square
+        QVERIFY(framedView(100, 125));     // its left edge
+        for (QAction *a : window->actions())
+            if (a->text().remove('&') == QLatin1String("Rotate left"))
+                a->trigger();
+
+        // Reports: JSON and PDF.
+        QTemporaryDir out;
+        QVERIFY(panel->saveReport(out.filePath("r.json")));
+        QFile json(out.filePath("r.json"));
+        QVERIFY(json.open(QIODevice::ReadOnly));
+        const QByteArray text = json.readAll();
+        QVERIFY(text.contains("\"color.rgb\"") && text.contains("x1a_two_pages.pdf"));
+        QVERIFY(panel->saveReport(out.filePath("r.pdf")));
+        QFile pdf(out.filePath("r.pdf"));
+        QVERIFY(pdf.open(QIODevice::ReadOnly));
+        QVERIFY(pdf.read(5) == "%PDF-");
+
+        // A clean file passes, and opening it clears the old result first.
+        window->openFile(QStringLiteral(TEST_DATA_DIR "/x1a_ok.pdf"));
+        QTRY_VERIFY(window->windowTitle().startsWith("x1a_ok.pdf"));
+        QTRY_VERIFY(!panel->hasReport());
+        QCOMPARE(tree->topLevelItemCount(), 0);
+        button->click();
+        QTRY_VERIFY(panel->hasReport());
+        QVERIFY2(result->text().contains("Passed"), qPrintable(result->text()));
+
+        // Checking the same file against another standard reports the wrong marker.
+        standard->setCurrentIndex(standard->findText(QStringLiteral("PDF/X-4")));
+        button->click();
+        QTRY_VERIFY(result->text().contains("Failed"));
+        QVERIFY(tree->topLevelItemCount() >= 1);
 
         window->openFile(QStringLiteral(TEST_DATA_DIR "/ink_patches.pdf"));
         QTRY_VERIFY(window->windowTitle().startsWith("ink_patches.pdf"));
