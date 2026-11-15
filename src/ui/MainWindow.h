@@ -108,9 +108,9 @@ private:
     engine::PageRender m_pending; // render whose screen image is being prepared
     engine::PageRender m_shown;   // render the view is showing right now
     QThread m_compositeThread;
-    CompositeWorker *m_compositor;
+    CompositeWorker *m_compositor = nullptr;
     int m_compositeId = 0;
-    QTimer *m_resizeTimer;
+    QTimer *m_resizeTimer = nullptr;
     // Profile files are read once, not on every screen update.
     mutable QString m_simulationPath, m_monitorPath;
     mutable QByteArray m_simulationData, m_monitorData;

@@ -55,6 +55,18 @@ MainWindow::MainWindow(bool safeMode) : m_safeMode(safeMode)
     qRegisterMetaType<QList<engine::ObjectInfo>>();
     qRegisterMetaType<preflight::Report>();
 
+    // Created before anything that can make the system send a resize event:
+    // on Windows that happens while the panels below are still being built.
+    // While the window is being dragged to a new size, the page is rendered
+    // again only once the resizing pauses.
+    m_resizeTimer = new QTimer(this);
+    m_resizeTimer->setSingleShot(true);
+    m_resizeTimer->setInterval(120);
+    connect(m_resizeTimer, &QTimer::timeout, this, [this] {
+        if (m_fit)
+            render();
+    });
+
     setWindowTitle(QApplication::applicationDisplayName());
     resize(1200, 820);
 
@@ -191,16 +203,6 @@ MainWindow::MainWindow(bool safeMode) : m_safeMode(safeMode)
     m_compositeThread.start();
 
     m_systemMonitorProfile = engine::ProfileLibrary::systemMonitorProfile();
-
-    // While the window is being dragged to a new size, wait for a pause
-    // before rendering the page again.
-    m_resizeTimer = new QTimer(this);
-    m_resizeTimer->setSingleShot(true);
-    m_resizeTimer->setInterval(120);
-    connect(m_resizeTimer, &QTimer::timeout, this, [this] {
-        if (m_fit)
-            render();
-    });
 
     connect(m_view, &PageView::zoomRequested, this, &MainWindow::zoomBy);
     connect(m_view, &PageView::fileDropped, this, &MainWindow::openFile);
@@ -1091,6 +1093,6 @@ void MainWindow::closeEvent(QCloseEvent *event)
 void MainWindow::resizeEvent(QResizeEvent *event)
 {
     QMainWindow::resizeEvent(event);
-    if (m_fit)
+    if (m_fit && m_resizeTimer)
         m_resizeTimer->start();
 }
