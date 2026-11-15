@@ -50,6 +50,7 @@ Tag pushes also publish, but the Claude cloud sandbox cannot push tags (403).
 - Separations list with per-plate show/hide; single plate shown as grey.
 - Ink % under cursor, total area coverage, 1/3x3/5x5 sampling.
 - Coverage highlight above a limit.
+- Per-box overlay switches (trim, bleed, crop, art, media) and middle-button panning.
 - PDF/X preflight (verification only): five standards, clickable findings,
   PDF/HTML/JSON report, command-line mode. See "Preflight" below.
 - Pages panel with thumbnails (requested one at a time so they never queue
@@ -76,8 +77,8 @@ Tag pushes also publish, but the Claude cloud sandbox cannot push tags (403).
   and ink readout, the inspector overlay and search highlights all assume
   that. Continuous scrolling needs a multi-page layout with a render per
   visible page; large sheets need rendering only the visible region instead
-  of the whole page (today capped at 60 megapixels by `kMaxPixels`).
-- Crop and media box overlays, black-ink simulation, HiDPI rendering.
+  of the whole page (today capped at 32 megapixels by `kMaxPixels`).
+- Black-ink simulation, HiDPI rendering.
 - Monitor profile detection on Linux and macOS; per-screen profiles.
 - Bundled press profiles (licence must be confirmed per profile).
 - Dock layout and main window geometry are not saved between sessions.
@@ -142,6 +143,7 @@ src/ui/
                      non-dockable QDockWidget ("outputPreview") owned by MainWindow:
                      the owner wants it as a separate draggable window
   ProfileDialog      profile management
+  CompositeWorker    ink channels -> screen image on its own thread
   PreflightPanel     standard selector, Check/Stop, findings tree, report export
 src/preflight/       compiled into the engine library
   Types.h, Report.cpp  Standard, Finding, Report; HTML and JSON export
@@ -268,6 +270,32 @@ Scripting and a debug inspector were offered and not chosen.
 - Not customisable yet: Output Preview contents, page box overlay colours
   (hard-coded in `PageCanvas::paintEvent`), toolbar icons (text only).
 
+## Responsiveness (v0.4.1)
+
+The owner reported the app as "really slow and unresponsive" in v0.4.0. Measured
+cause (`./build/bench [cmyk.icc]`, 4 cores): `engine::composite` ran on the UI
+thread at about 17 ms per megapixel with an ICC profile, i.e. 0.5-1 s per
+screen update when zoomed in, repeated for every plate toggle; the colour
+transform was rebuilt and the profile files re-read on every update and every
+thumbnail. What changed:
+
+- `CompositeWorker` (own thread, latest request wins). `MainWindow` keeps three
+  renders: `m_render` (newest), `m_pending` (being composited), `m_shown` (on
+  screen). **Ink readout must use `m_shown`**, because the picture on screen
+  can be one step behind.
+- `composite()`: transform cached (`transformFor`, shared across threads, built
+  with `cmsFLAGS_NOCACHE`), rows split across cores, whole-number arithmetic,
+  and each run of equal pixels in a row converted once.
+  60 MP flat artwork with a profile: about 1000 ms -> 110 ms. Photographic
+  pages gain only the multi-core factor (about 550 ms at 60 MP on 4 cores).
+- Thumbnails are composited on the render thread; profile bytes and the system
+  monitor profile are cached in `MainWindow`; fit-on-resize is debounced.
+- `kMaxPixels` lowered from 60 to 32 megapixels.
+
+Not verified on the owner's machine or files. If it is still slow, ask which
+action is slow and for the file's page size and page count. The real fix for
+large sheets is rendering only the visible region (phase 1 leftover below).
+
 ## Coordinates and rotation
 
 Everything the UI receives from the engine (page boxes, search rectangles,
@@ -293,7 +321,7 @@ rendered area, y down, view rotation already applied (`viewMatrix` in
   `MainWindow::m_requestId`).
 - Rendered size is capped at 60 megapixels (`kMaxPixels` in `MainWindow.cpp`).
 - QSettings keys: `recentFiles`, `simulationProfile`, `monitorProfile`,
-  `coverageLimit`, `showBoxes`, `outputPreviewGeometry`, `outputPreviewVisible`,
+  `coverageLimit`, `showBox/trim|bleed|crop|art|media` (`showBoxes` is the old single switch), `outputPreviewGeometry`, `outputPreviewVisible`,
   `devMode`.
 - `pdfx1a_marked.pdf` and `pdfx4_marked.pdf` only carry the markers; they are
   not compliant files. Real conformance tests need the Ghent Output Suite and

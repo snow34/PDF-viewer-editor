@@ -62,9 +62,10 @@ OutputPreviewPanel::OutputPreviewPanel(QWidget *parent) : QWidget(parent)
     form2->addRow(m_coverage, m_limit);
     layout->addLayout(form2);
 
-    m_boxes = new QCheckBox(tr("Show page boxes (trim green, bleed blue, art red)"));
-    m_boxes->setChecked(settings.value(QStringLiteral("showBoxes"), true).toBool());
-    layout->addWidget(m_boxes);
+    layout->addWidget(new QLabel(tr("Page boxes:")));
+    m_boxRow = new QHBoxLayout;
+    m_boxRow->setSpacing(8);
+    layout->addLayout(m_boxRow);
 
     setInkValues({});
 
@@ -84,10 +85,6 @@ OutputPreviewPanel::OutputPreviewPanel(QWidget *parent) : QWidget(parent)
         QSettings().setValue(QStringLiteral("coverageLimit"), v);
         if (m_coverage->isChecked())
             emit displayChanged();
-    });
-    connect(m_boxes, &QCheckBox::toggled, this, [this](bool on) {
-        QSettings().setValue(QStringLiteral("showBoxes"), on);
-        emit boxesToggled(on);
     });
 }
 
@@ -173,4 +170,23 @@ std::vector<bool> OutputPreviewPanel::visibleInks() const
 int OutputPreviewPanel::sampleSize() const { return m_sample->currentData().toInt(); }
 bool OutputPreviewPanel::showCoverage() const { return m_coverage->isChecked(); }
 double OutputPreviewPanel::coverageLimit() const { return m_limit->value(); }
-bool OutputPreviewPanel::showBoxes() const { return m_boxes->isChecked(); }
+
+void OutputPreviewPanel::setBoxActions(const QList<QAction *> &actions)
+{
+    for (QAction *action : actions) {
+        // "Trim box" -> "Trim": the row label already says these are page boxes.
+        QString name = action->text().remove(QLatin1Char('&'));
+        name = name.left(name.indexOf(QLatin1Char(' ')));
+        auto *box = new QCheckBox(name);
+        box->setObjectName(QStringLiteral("box") + name);
+        QPixmap swatch(10, 10); // the colour of this box's line on the page
+        swatch.fill(QColor(action->data().toString()));
+        box->setIcon(QIcon(swatch));
+        box->setToolTip(action->toolTip());
+        box->setChecked(action->isChecked());
+        connect(box, &QCheckBox::toggled, action, &QAction::setChecked);
+        connect(action, &QAction::toggled, box, &QCheckBox::setChecked);
+        m_boxRow->addWidget(box);
+    }
+    m_boxRow->addStretch();
+}

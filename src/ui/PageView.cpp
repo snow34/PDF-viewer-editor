@@ -4,6 +4,7 @@
 #include <QMimeData>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QScrollBar>
 #include <QWheelEvent>
 
 class PageCanvas : public QWidget {
@@ -13,7 +14,10 @@ public:
     QImage image;
     engine::PageBoxes boxes;
     double zoom = 1.0;
-    bool showBoxes = true;
+    PageView::BoxVisibility show;
+    bool panning = false;
+    QPoint panStart;      // cursor position on screen when the drag began
+    QPoint panScrollStart; // scroll bar positions at that moment
     QList<QRectF> hits, currentHits;
     QRectF selection;
 
@@ -48,21 +52,29 @@ protected:
             p.setPen(QPen(QColor(255, 0, 200), 2));
             p.drawRect(scaled(selection));
         }
-        if (!showBoxes)
-            return;
-        auto draw = [&](bool present, const QRectF &r, const QColor &c) {
-            if (!present)
+        auto draw = [&](bool wanted, bool present, const QRectF &r, const QColor &c) {
+            if (!wanted || !present)
                 return;
             p.setPen(QPen(c, 1, Qt::DashLine));
             p.drawRect(QRectF(r.topLeft() * zoom, r.size() * zoom));
         };
-        draw(boxes.hasBleed, boxes.bleed, QColor(0, 120, 255));
-        draw(boxes.hasTrim, boxes.trim, QColor(0, 170, 0));
-        draw(boxes.hasArt, boxes.art, QColor(220, 0, 0));
+        // A page without a CropBox is cropped to its MediaBox.
+        draw(show.media, true, boxes.media, QColor(90, 90, 90));
+        draw(show.crop, true, boxes.hasCrop ? boxes.crop : boxes.media, QColor(150, 0, 200));
+        draw(show.bleed, boxes.hasBleed, boxes.bleed, QColor(0, 120, 255));
+        draw(show.trim, boxes.hasTrim, boxes.trim, QColor(0, 170, 0));
+        draw(show.art, boxes.hasArt, boxes.art, QColor(220, 0, 0));
     }
 
     void mouseMoveEvent(QMouseEvent *e) override
     {
+        if (panning) {
+            // Drag the page with the cursor: the scroll bars move the other way.
+            const QPoint delta = e->globalPosition().toPoint() - panStart;
+            m_view->horizontalScrollBar()->setValue(panScrollStart.x() - delta.x());
+            m_view->verticalScrollBar()->setValue(panScrollStart.y() - delta.y());
+            return;
+        }
         const QPoint pos = e->position().toPoint() - QPoint(margin, margin);
         if (!image.isNull() && image.rect().contains(pos))
             emit m_view->hovered(pos.x(), pos.y());
@@ -72,9 +84,24 @@ protected:
 
     void mousePressEvent(QMouseEvent *e) override
     {
+        if (e->button() == Qt::MiddleButton) {
+            panning = true;
+            panStart = e->globalPosition().toPoint();
+            panScrollStart = QPoint(m_view->horizontalScrollBar()->value(), m_view->verticalScrollBar()->value());
+            setCursor(Qt::ClosedHandCursor);
+            return;
+        }
         const QPoint pos = e->position().toPoint() - QPoint(margin, margin);
         if (e->button() == Qt::LeftButton && !image.isNull() && image.rect().contains(pos))
             emit m_view->clicked(QPointF(pos) / zoom);
+    }
+
+    void mouseReleaseEvent(QMouseEvent *e) override
+    {
+        if (e->button() == Qt::MiddleButton && panning) {
+            panning = false;
+            unsetCursor();
+        }
     }
 
     void leaveEvent(QEvent *) override { emit m_view->hoverLeft(); }
@@ -105,9 +132,9 @@ void PageView::setImage(const QImage &image)
     m_canvas->refresh();
 }
 
-void PageView::setShowBoxes(bool on)
+void PageView::setVisibleBoxes(const BoxVisibility &boxes)
 {
-    m_canvas->showBoxes = on;
+    m_canvas->show = boxes;
     m_canvas->update();
 }
 

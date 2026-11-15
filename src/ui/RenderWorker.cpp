@@ -26,13 +26,15 @@ void RenderWorker::renderPage(int page, double zoom, int rotation, int requestId
     emit pageRendered(m_doc->render(page, zoom, rotation), requestId);
 }
 
-void RenderWorker::renderThumbnail(int page, int size, int rotation, int generation)
+void RenderWorker::renderThumbnail(int page, int size, int rotation, const engine::CompositeOptions &options,
+                                   int generation)
 {
     if (!m_doc)
         return;
     const QSizeF pt = m_doc->pageSize(page);
     const double longest = qMax(pt.width(), pt.height());
-    emit thumbnailRendered(m_doc->render(page, longest > 0 ? size / longest : 0.1, rotation), generation);
+    const engine::PageRender render = m_doc->render(page, longest > 0 ? size / longest : 0.1, rotation);
+    emit thumbnailRendered(page, render.image ? engine::composite(*render.image, options) : QImage(), generation);
 }
 
 void RenderWorker::search(const QString &text, int rotation, int searchId)

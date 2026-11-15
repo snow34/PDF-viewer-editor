@@ -15,6 +15,8 @@ class PageView;
 class PreflightPanel;
 class QDockWidget;
 class RenderWorker;
+class CompositeWorker;
+class QTimer;
 class QLabel;
 class QLineEdit;
 class QListWidget;
@@ -38,7 +40,10 @@ public:
 signals:
     void requestOpen(const QString &path);
     void requestRender(int page, double zoom, int rotation, int requestId);
-    void requestThumbnail(int page, int size, int rotation, int generation);
+    void requestThumbnail(int page, int size, int rotation, const engine::CompositeOptions &options,
+                          int generation);
+    void requestComposite(const std::shared_ptr<engine::SeparatedImage> &image,
+                          const engine::CompositeOptions &options, int requestId);
     void requestSearch(const QString &text, int rotation, int searchId);
     void requestInspect(int page, QPointF point, int rotation);
     void requestPreflight(int standard, int checkId);
@@ -55,12 +60,15 @@ private:
     void applyCustomization();
     void applyLayout(const Layout &layout, QStringList *problems);
     void setDevMode(bool on);
+    void applyBoxVisibility();
     void showItemList();
     void resetCustomization();
     void chooseFile();
     void onOpened(const engine::DocumentInfo &info, const QList<QSizeF> &sizes);
     void onRendered(const engine::PageRender &render, int requestId);
-    void onThumbnail(const engine::PageRender &render, int generation);
+    void onThumbnail(int page, const QImage &image, int generation);
+    void onComposed(const QImage &image, bool calibrated, int requestId);
+    void requestNextThumbnail(int page);
     void restartThumbnails();
     void rotateBy(int degrees);
     QSizeF viewSize(int page) const;
@@ -96,7 +104,17 @@ private:
 
     engine::DocumentInfo m_info;
     QList<QSizeF> m_sizes;
-    engine::PageRender m_render;
+    engine::PageRender m_render;  // newest render received
+    engine::PageRender m_pending; // render whose screen image is being prepared
+    engine::PageRender m_shown;   // render the view is showing right now
+    QThread m_compositeThread;
+    CompositeWorker *m_compositor;
+    int m_compositeId = 0;
+    QTimer *m_resizeTimer;
+    // Profile files are read once, not on every screen update.
+    mutable QString m_simulationPath, m_monitorPath;
+    mutable QByteArray m_simulationData, m_monitorData;
+    QString m_systemMonitorProfile;
     int m_page = 0;
     double m_zoom = 1.0;
     bool m_fit = true;
@@ -135,6 +153,7 @@ private:
     QLabel *m_sizeLabel;
     QMenu *m_recent;
     QAction *m_fitAction;
+    QAction *m_boxTrim, *m_boxBleed, *m_boxCrop, *m_boxArt, *m_boxMedia;
 
     // Everything that can be placed in the toolbar or a menu, by id.
     QHash<QString, QAction *> m_items;

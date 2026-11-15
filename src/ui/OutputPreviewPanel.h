@@ -6,7 +6,9 @@
 
 #include <QWidget>
 
+class QAction;
 class QCheckBox;
+class QHBoxLayout;
 class QComboBox;
 class QDoubleSpinBox;
 class QLabel;
@@ -31,11 +33,11 @@ public:
     int sampleSize() const;
     bool showCoverage() const;
     double coverageLimit() const;
-    bool showBoxes() const;
+    // Adds one button per page box toggle (Trim, Bleed, ...).
+    void setBoxActions(const QList<QAction *> &actions);
 
 signals:
     void displayChanged(); // needs a recomposite
-    void boxesToggled(bool on);
 
 private:
     QComboBox *m_profile;
@@ -46,6 +48,6 @@ private:
     QComboBox *m_sample;
     QCheckBox *m_coverage;
     QDoubleSpinBox *m_limit;
-    QCheckBox *m_boxes;
+    QHBoxLayout *m_boxRow;
     bool m_filling = false;
 };

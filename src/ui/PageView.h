@@ -16,7 +16,11 @@ public:
     // `zoom` is the scale the image was rendered at (pixels per point).
     void setPage(const QImage &image, const engine::PageBoxes &boxes, double zoom);
     void setImage(const QImage &image);
-    void setShowBoxes(bool on);
+    // Which page boxes are drawn over the page.
+    struct BoxVisibility {
+        bool trim = true, bleed = true, crop = false, art = true, media = false;
+    };
+    void setVisibleBoxes(const BoxVisibility &boxes);
     void clear();
     // Overlays, in points: search hits (one of them current) and the object
     // picked with the inspector.

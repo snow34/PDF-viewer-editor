@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(PrepressPdf VERSION 0.4.0 LANGUAGES C CXX)
+project(PrepressPdf VERSION 0.4.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -50,6 +50,7 @@ if(WIN32)
 endif()
 
 add_library(ui STATIC
+    src/ui/CompositeWorker.cpp src/ui/CompositeWorker.h
     src/ui/Customization.cpp src/ui/Customization.h
     src/ui/MainWindow.cpp src/ui/MainWindow.h
     src/ui/PageView.cpp src/ui/PageView.h
@@ -85,3 +86,7 @@ target_link_libraries(test_preflight PRIVATE engine Qt6::Test)
 target_compile_definitions(test_preflight PRIVATE TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data")
 add_test(NAME test_preflight COMMAND test_preflight)
 set_tests_properties(test_preflight PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+add_executable(bench tests/bench.cpp)
+target_link_libraries(bench PRIVATE engine)
+target_compile_definitions(bench PRIVATE TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data")

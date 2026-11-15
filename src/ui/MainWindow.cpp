@@ -4,6 +4,7 @@
 #include "PageView.h"
 #include "PreflightPanel.h"
 #include "ProfileDialog.h"
+#include "CompositeWorker.h"
 #include "RenderWorker.h"
 #include "engine/Compositor.h"
 
@@ -37,7 +38,10 @@
 namespace {
 const double kMinZoom = 0.05;
 const double kMaxZoom = 64.0;
-const double kMaxPixels = 60e6; // keeps a rendered page within a sensible amount of memory
+// Upper limit for one rendered page. It bounds memory (about 8 bytes per pixel)
+// and the time every screen update takes; it also limits how far large
+// sheets can be zoomed until only the visible part is rendered.
+const double kMaxPixels = 32e6;
 const double kMmPerPoint = 25.4 / 72.0;
 const int kThumbnailSize = 120;
 } // namespace
@@ -177,11 +181,32 @@ MainWindow::MainWindow(bool safeMode) : m_safeMode(safeMode)
     });
     m_thread.start();
 
+    qRegisterMetaType<std::shared_ptr<engine::SeparatedImage>>();
+    qRegisterMetaType<engine::CompositeOptions>();
+    m_compositor = new CompositeWorker;
+    m_compositor->moveToThread(&m_compositeThread);
+    connect(&m_compositeThread, &QThread::finished, m_compositor, &QObject::deleteLater);
+    connect(this, &MainWindow::requestComposite, m_compositor, &CompositeWorker::compose);
+    connect(m_compositor, &CompositeWorker::composed, this, &MainWindow::onComposed);
+    m_compositeThread.start();
+
+    m_systemMonitorProfile = engine::ProfileLibrary::systemMonitorProfile();
+
+    // While the window is being dragged to a new size, wait for a pause
+    // before rendering the page again.
+    m_resizeTimer = new QTimer(this);
+    m_resizeTimer->setSingleShot(true);
+    m_resizeTimer->setInterval(120);
+    connect(m_resizeTimer, &QTimer::timeout, this, [this] {
+        if (m_fit)
+            render();
+    });
+
     connect(m_view, &PageView::zoomRequested, this, &MainWindow::zoomBy);
     connect(m_view, &PageView::fileDropped, this, &MainWindow::openFile);
     connect(m_view, &PageView::hovered, this, [this](int x, int y) {
-        if (m_render.image)
-            m_panel->setInkValues(engine::inkValues(*m_render.image, x, y, m_panel->sampleSize()));
+        if (m_shown.image) // the page on screen, which can be one step behind the newest render
+            m_panel->setInkValues(engine::inkValues(*m_shown.image, x, y, m_panel->sampleSize()));
     });
     connect(m_view, &PageView::clicked, this, [this](QPointF point) {
         if (m_info.pageCount > 0)
@@ -189,8 +214,8 @@ MainWindow::MainWindow(bool safeMode) : m_safeMode(safeMode)
     });
     connect(m_view, &PageView::hoverLeft, this, [this] { m_panel->setInkValues({}); });
     connect(m_panel, &OutputPreviewPanel::displayChanged, this, &MainWindow::recomposite);
-    connect(m_panel, &OutputPreviewPanel::boxesToggled, m_view, &PageView::setShowBoxes);
-    m_view->setShowBoxes(m_panel->showBoxes());
+    m_panel->setBoxActions({ m_boxTrim, m_boxBleed, m_boxCrop, m_boxArt, m_boxMedia });
+    applyBoxVisibility();
 
     refreshProfiles();
     updateBanner();
@@ -199,7 +224,9 @@ MainWindow::MainWindow(bool safeMode) : m_safeMode(safeMode)
 MainWindow::~MainWindow()
 {
     m_thread.quit();
+    m_compositeThread.quit();
     m_thread.wait();
+    m_compositeThread.wait();
 }
 
 QAction *MainWindow::addItem(const QString &id, const QString &text, const QString &help,
@@ -255,6 +282,39 @@ void MainWindow::buildActions()
     connect(addItem(QStringLiteral("view.rotateRight"), tr("Rotate &right"), tr("Turn the view 90° clockwise"),
                     QKeySequence(tr("Ctrl+Shift++"))),
             &QAction::triggered, this, [this] { rotateBy(90); });
+
+    // One switch per page box. The colour (kept in data()) matches the line drawn on the page.
+    {
+        QSettings settings;
+        // An older version had a single switch for all boxes; honour it when it was off.
+        const bool allOff = !settings.value(QStringLiteral("showBoxes"), true).toBool();
+        struct Box {
+            QAction **action;
+            const char *id, *key;
+            QString text, help, colour;
+            bool on;
+        };
+        const Box boxes[] = {
+            { &m_boxTrim, "view.boxTrim", "showBox/trim", tr("&Trim box"), tr("Show the TrimBox (green)"), "#00aa00", true },
+            { &m_boxBleed, "view.boxBleed", "showBox/bleed", tr("&Bleed box"), tr("Show the BleedBox (blue)"), "#0078ff", true },
+            { &m_boxCrop, "view.boxCrop", "showBox/crop", tr("&Crop box"), tr("Show the CropBox (purple)"), "#9600c8", false },
+            { &m_boxArt, "view.boxArt", "showBox/art", tr("&Art box"), tr("Show the ArtBox (red)"), "#dc0000", true },
+            { &m_boxMedia, "view.boxMedia", "showBox/media", tr("&Media box"), tr("Show the MediaBox (grey)"), "#5a5a5a", false },
+        };
+        for (const Box &box : boxes) {
+            QAction *action = addItem(QString::fromLatin1(box.id), box.text, box.help);
+            action->setCheckable(true);
+            action->setData(box.colour);
+            action->setToolTip(box.help);
+            const QString key = QString::fromLatin1(box.key);
+            action->setChecked(settings.value(key, box.on && !allOff).toBool());
+            connect(action, &QAction::toggled, this, [this, key](bool on) {
+                QSettings().setValue(key, on);
+                applyBoxVisibility();
+            });
+            *box.action = action;
+        }
+    }
 
     connect(addItem(QStringLiteral("edit.find"), tr("&Find…"), tr("Search for text"), QKeySequence::Find),
             &QAction::triggered, this, &MainWindow::showSearchBar);
@@ -372,6 +432,17 @@ void MainWindow::buildActions()
         Customization::writeMissingFiles(m_itemHelp);
 
     updateRecentMenu();
+}
+
+void MainWindow::applyBoxVisibility()
+{
+    PageView::BoxVisibility show;
+    show.trim = m_boxTrim->isChecked();
+    show.bleed = m_boxBleed->isChecked();
+    show.crop = m_boxCrop->isChecked();
+    show.art = m_boxArt->isChecked();
+    show.media = m_boxMedia->isChecked();
+    m_view->setVisibleBoxes(show);
 }
 
 void MainWindow::setDevMode(bool on)
@@ -504,6 +575,9 @@ void MainWindow::onOpened(const engine::DocumentInfo &info, const QList<QSizeF> 
     m_page = 0;
     m_rotation = 0;
     m_render = {};
+    m_pending = {};
+    m_shown = {};
+    ++m_compositeId; // anything still being prepared belongs to the previous document
     m_hits.clear();
     m_currentHit = -1;
     m_searchText.clear();
@@ -570,19 +644,24 @@ void MainWindow::restartThumbnails()
     }
     m_thumbnails->setCurrentRow(m_page);
     // One at a time, so thumbnails never hold up the page being viewed.
-    if (m_info.pageCount > 0)
-        emit requestThumbnail(0, kThumbnailSize, m_rotation, m_thumbGeneration);
+    requestNextThumbnail(0);
 }
 
-void MainWindow::onThumbnail(const engine::PageRender &render, int generation)
+void MainWindow::requestNextThumbnail(int page)
+{
+    if (page >= m_info.pageCount)
+        return;
+    engine::CompositeOptions o = compositeOptions();
+    o.visible.clear();
+    o.showCoverage = false;
+    emit requestThumbnail(page, kThumbnailSize, m_rotation, o, m_thumbGeneration);
+}
+
+void MainWindow::onThumbnail(int page, const QImage &image, int generation)
 {
     if (generation != m_thumbGeneration)
         return;
-    if (render.image && render.page < m_thumbnails->count()) {
-        engine::CompositeOptions o = compositeOptions();
-        o.visible.clear();
-        o.showCoverage = false;
-        const QImage image = engine::composite(*render.image, o);
+    if (!image.isNull() && page < m_thumbnails->count()) {
         QPixmap framed(kThumbnailSize, kThumbnailSize);
         framed.fill(Qt::transparent);
         QPainter p(&framed);
@@ -593,11 +672,10 @@ void MainWindow::onThumbnail(const engine::PageRender &render, int generation)
         p.end();
         QIcon icon(framed);
         icon.addPixmap(framed, QIcon::Selected); // no colour wash over the selected page
-        m_thumbnails->item(render.page)->setIcon(icon);
+        m_thumbnails->item(page)->setIcon(icon);
     }
-    m_nextThumbnail = render.page + 1;
-    if (m_nextThumbnail < m_info.pageCount)
-        emit requestThumbnail(m_nextThumbnail, kThumbnailSize, m_rotation, m_thumbGeneration);
+    m_nextThumbnail = page + 1;
+    requestNextThumbnail(m_nextThumbnail);
 }
 
 void MainWindow::showSearchBar()
@@ -833,6 +911,55 @@ void MainWindow::onRendered(const engine::PageRender &render, int requestId)
         m_view->setSelection(m_pendingFrame.isValid() ? toCurrentRotation(m_pendingFrame, m_page) : QRectF());
         m_pendingFramePage = -1;
     }
+}
+
+engine::CompositeOptions MainWindow::compositeOptions() const
+{
+    engine::CompositeOptions o;
+    o.visible = m_panel->visibleInks();
+    const QString choice = m_panel->simulationChoice();
+    if (choice == QLatin1String("intent"))
+        o.simulationProfile = m_info.outputIntentProfile;
+    else if (!choice.isEmpty()) {
+        if (choice != m_simulationPath) {
+            m_simulationPath = choice;
+            m_simulationData = engine::ProfileLibrary::load(choice);
+        }
+        o.simulationProfile = m_simulationData;
+    }
+    // No choice saved means automatic: the screen's own profile if the
+    // system reports one, sRGB otherwise.
+    QString monitor = QSettings().value(QStringLiteral("monitorProfile")).toString();
+    if (monitor.isEmpty())
+        monitor = m_systemMonitorProfile;
+    if (monitor != m_monitorPath) {
+        m_monitorPath = monitor;
+        m_monitorData = monitor.isEmpty() ? QByteArray() : engine::ProfileLibrary::load(monitor);
+    }
+    o.monitorProfile = m_monitorData;
+    o.intent = m_panel->intent();
+    o.showCoverage = m_panel->showCoverage();
+    o.coverageLimit = m_panel->coverageLimit();
+    return o;
+}
+
+void MainWindow::recomposite()
+{
+    if (!m_render.image)
+        return;
+    // The conversion runs on its own thread; onComposed puts the result on screen.
+    m_pending = m_render;
+    m_compositor->setLatestRequest(++m_compositeId);
+    emit requestComposite(m_render.image, compositeOptions(), m_compositeId);
+}
+
+void MainWindow::onComposed(const QImage &image, bool calibrated, int requestId)
+{
+    if (requestId != m_compositeId)
+        return; // replaced by a newer request, or the document was closed
+    m_shown = m_pending;
+    m_panel->setCalibrated(calibrated);
+    m_view->setPage(image, m_shown.boxes, m_shown.zoom);
 
     if (!m_screenshot.isEmpty()) {
         const QString file = m_screenshot;
@@ -846,38 +973,6 @@ void MainWindow::onRendered(const engine::PageRender &render, int requestId)
             qApp->quit();
         });
     }
-}
-
-engine::CompositeOptions MainWindow::compositeOptions() const
-{
-    engine::CompositeOptions o;
-    o.visible = m_panel->visibleInks();
-    const QString choice = m_panel->simulationChoice();
-    if (choice == QLatin1String("intent"))
-        o.simulationProfile = m_info.outputIntentProfile;
-    else if (!choice.isEmpty())
-        o.simulationProfile = engine::ProfileLibrary::load(choice);
-    // No choice saved means automatic: the screen's own profile if the
-    // system reports one, sRGB otherwise.
-    QString monitor = QSettings().value(QStringLiteral("monitorProfile")).toString();
-    if (monitor.isEmpty())
-        monitor = engine::ProfileLibrary::systemMonitorProfile();
-    if (!monitor.isEmpty())
-        o.monitorProfile = engine::ProfileLibrary::load(monitor);
-    o.intent = m_panel->intent();
-    o.showCoverage = m_panel->showCoverage();
-    o.coverageLimit = m_panel->coverageLimit();
-    return o;
-}
-
-void MainWindow::recomposite()
-{
-    if (!m_render.image)
-        return;
-    bool calibrated = false;
-    const QImage image = engine::composite(*m_render.image, compositeOptions(), &calibrated);
-    m_panel->setCalibrated(calibrated);
-    m_view->setPage(image, m_render.boxes, m_render.zoom);
 }
 
 void MainWindow::refreshProfiles()
@@ -979,7 +1074,7 @@ void MainWindow::showEvent(QShowEvent *event)
         m_previewWindow->setGeometry(saved);
     } else {
         // First start: over the right-hand side of the main window.
-        m_previewWindow->resize(340, 520);
+        m_previewWindow->resize(360, 560);
         m_previewWindow->move(geometry().topRight() + QPoint(-380, 90));
     }
     m_previewWindow->setVisible(settings.value(QStringLiteral("outputPreviewVisible"), true).toBool());
@@ -997,5 +1092,5 @@ void MainWindow::resizeEvent(QResizeEvent *event)
 {
     QMainWindow::resizeEvent(event);
     if (m_fit)
-        render();
+        m_resizeTimer->start();
 }

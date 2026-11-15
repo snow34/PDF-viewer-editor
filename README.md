@@ -20,6 +20,7 @@ It is open source (AGPL-3.0) and built with C++, Qt 6 and MuPDF.
 | Move between pages | **Previous page** / **Next page** in the toolbar, Page Up / Page Down, or type a page number. |
 | Jump to a page | Click its thumbnail in the **Pages** panel on the left. |
 | Zoom | **Zoom in** / **Zoom out**, or hold Ctrl and scroll. **Fit page** shows the whole page. |
+| Move around a zoomed page | Press and hold the **middle mouse button** (the wheel) and drag. The scroll bars and the wheel work too. |
 | Turn the page | **Rotate left** / **Rotate right**. This only turns the view; the file is not changed. |
 | Find text | **Edit > Find** (Ctrl+F), type the text and press Enter. Results are highlighted; Enter or **Find next** / **Find previous** moves between them, across all pages. |
 | See what an object is made of | Click it on the page. The **Object Inspector** on the right lists everything under that point, topmost first: colour space and colour values, overprint, opacity, the font and size for text, pixel size and resolution (ppi) for images. The top object gets a pink frame. |
@@ -31,7 +32,7 @@ It is open source (AGPL-3.0) and built with C++, Qt 6 and MuPDF.
 | Find areas with too much ink | Tick **Highlight total area coverage above** and set your limit (for example 300 %). Everything above it turns bright green. |
 | Preview colours for a press | Pick a profile under **Simulation profile**. If the file has its own output intent, that is used by default. |
 | Preview the paper colour | Set **Display** to *Absolute (simulate paper white)*. |
-| See trim and bleed | Tick **Show page boxes**. Trim is green, bleed is blue, art is red. The trim size in mm is shown bottom right. |
+| Show or hide page boxes | Use the **Page boxes** buttons at the bottom of the Output Preview window, or the **View** menu. Each box has its own switch: Trim (green), Bleed (blue), Crop (purple), Art (red), Media (grey). The trim size in mm is shown bottom right. |
 | Check whether a file says it is PDF/X | Look at the bottom left of the window, or open **File > Properties**. |
 | Check whether a file really is PDF/X | **Tools > Preflight** (Ctrl+Shift+X). See below. |
 
@@ -60,6 +61,10 @@ their title to another side or out into their own window.
   clipping into account, so it can list an object that is hidden at that spot.
 - "substituted, not embedded" next to a font means the PDF does not contain
   the font and a stand-in is shown. A printer may reject such a file.
+- A box only appears if the file defines it. A page without a CropBox is
+  cropped to its MediaBox, so the Crop switch then shows the page edge.
+- Very large sheets cannot be zoomed in without limit yet: one page is drawn
+  as a single picture of at most 32 megapixels.
 - If no CMYK profile is selected, colours on screen are only approximate and
   the Output Preview window says so. Ink percentages are still correct.
 

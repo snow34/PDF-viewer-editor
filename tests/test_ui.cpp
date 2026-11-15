@@ -7,6 +7,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QPushButton>
+#include <QScrollBar>
 #include <QSpinBox>
 #include <QDockWidget>
 #include <QLabel>
@@ -331,6 +332,113 @@ private slots:
         QTRY_VERIFY(result->text().contains("Failed"));
         QVERIFY(tree->topLevelItemCount() >= 1);
 
+        window->openFile(QStringLiteral(TEST_DATA_DIR "/ink_patches.pdf"));
+        QTRY_VERIFY(window->windowTitle().startsWith("ink_patches.pdf"));
+        QTest::qWait(300);
+    }
+
+    void pageBoxesCanBeSwitchedIndividually()
+    {
+        window->openFile(QStringLiteral(TEST_DATA_DIR "/x1a_trim_and_art.pdf")); // Trim 10..290, Art 20..280
+        QTRY_VERIFY(window->windowTitle().startsWith("x1a_trim_and_art.pdf"));
+        QTest::qWait(300);
+
+        auto action = [this](const char *name) {
+            for (QAction *a : window->actions())
+                if (a->text().remove('&') == QLatin1String(name))
+                    return a;
+            return static_cast<QAction *>(nullptr);
+        };
+        QAction *trim = action("Trim box"), *crop = action("Crop box"), *art = action("Art box"),
+                *bleed = action("Bleed box"), *media = action("Media box");
+        QVERIFY(trim && crop && art && bleed && media);
+        QVERIFY(trim->isChecked() && art->isChecked() && !crop->isChecked() && !media->isChecked());
+
+        // A box line is dashed, so look along the whole left edge of the box for its colour.
+        auto lineAt = [this](double x, auto matches) {
+            const QImage img = canvas->grab().toImage();
+            const int px = 12 + int(x * zoom());
+            for (int y = 12 + int(60 * zoom()); y < 12 + int(240 * zoom()); ++y)
+                for (int dx = -1; dx <= 1; ++dx)
+                    if (matches(img.pixelColor(px + dx, y)))
+                        return true;
+            return false;
+        };
+        auto green = [](QColor c) { return c.green() > 120 && c.red() < 90 && c.blue() < 90; };
+        auto red = [](QColor c) { return c.red() > 170 && c.green() < 90 && c.blue() < 90; };
+        auto purple = [](QColor c) { return c.red() > 110 && c.green() < 70 && c.blue() > 150; };
+
+        QTRY_VERIFY(lineAt(10, green)); // trim
+        QVERIFY(lineAt(20, red));       // art
+        QVERIFY(!lineAt(0, purple));    // crop is off
+
+        trim->setChecked(false);
+        QTRY_VERIFY(!lineAt(10, green));
+        QVERIFY(lineAt(20, red)); // the art box is not affected
+
+        art->setChecked(false);
+        QTRY_VERIFY(!lineAt(20, red));
+
+        crop->setChecked(true); // no CropBox in the file: it equals the page edge
+        QTRY_VERIFY(lineAt(0, purple));
+
+        // The switches in the Output Preview window are the same switches.
+        auto *trimBox = window->findChild<QCheckBox *>(QStringLiteral("boxTrim"));
+        auto *cropBox = window->findChild<QCheckBox *>(QStringLiteral("boxCrop"));
+        QVERIFY(trimBox && cropBox);
+        QVERIFY(!trimBox->isChecked() && cropBox->isChecked());
+        cropBox->setChecked(false);
+        QVERIFY(!crop->isChecked());
+        QTRY_VERIFY(!lineAt(0, purple));
+        cropBox->setChecked(true);
+
+        // The choice is remembered.
+        QVERIFY(!QSettings().value("showBox/trim").toBool());
+        QVERIFY(QSettings().value("showBox/crop").toBool());
+
+        crop->setChecked(false);
+        trim->setChecked(true);
+        art->setChecked(true);
+        QTRY_VERIFY(lineAt(10, green));
+    }
+
+    void middleButtonDragsThePage()
+    {
+        auto *view = window->findChild<PageView *>();
+        QAction *zoomIn = nullptr, *fit = nullptr;
+        for (QAction *a : window->actions()) {
+            if (a->text().remove('&') == QLatin1String("Zoom in"))
+                zoomIn = a;
+            if (a->text().remove('&') == QLatin1String("Fit page"))
+                fit = a;
+        }
+        QVERIFY(zoomIn && fit);
+        const int fitted = canvas->width();
+        for (int i = 0; i < 4; ++i)
+            zoomIn->trigger();
+        QTRY_VERIFY(canvas->width() > fitted * 2); // now larger than the window, so it can scroll
+        QScrollBar *h = view->horizontalScrollBar(), *v = view->verticalScrollBar();
+        QVERIFY(h->maximum() > 100 && v->maximum() > 100);
+        h->setValue(0);
+        v->setValue(0);
+
+        // Pressing the wheel and dragging 60 left and 40 up pulls the page that way.
+        const QPoint start(200, 150);
+        QTest::mousePress(canvas, Qt::MiddleButton, {}, start);
+        QCOMPARE(canvas->cursor().shape(), Qt::ClosedHandCursor);
+        QTest::mouseMove(canvas, start + QPoint(-60, -40));
+        QTRY_COMPARE(h->value(), 60);
+        QCOMPARE(v->value(), 40);
+        QTest::mouseRelease(canvas, Qt::MiddleButton, {}, start + QPoint(-60, -40));
+
+        // After the button is released the page no longer follows the mouse.
+        QTest::mouseMove(canvas, start + QPoint(-200, -200));
+        QTest::qWait(50);
+        QCOMPARE(h->value(), 60);
+        QCOMPARE(v->value(), 40);
+
+        fit->trigger();
+        QTRY_VERIFY(qAbs(canvas->width() - fitted) < 30); // back to the whole page
         window->openFile(QStringLiteral(TEST_DATA_DIR "/ink_patches.pdf"));
         QTRY_VERIFY(window->windowTitle().startsWith("ink_patches.pdf"));
         QTest::qWait(300);
