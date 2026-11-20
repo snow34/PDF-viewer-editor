@@ -492,7 +492,10 @@ private slots:
         QTRY_COMPARE(spin->value(), 2);
         QCOMPARE(thumbs->currentRow(), 1);
         QTRY_VERIFY(view->isComplete());
-        QTRY_COMPARE(shown(125, 125, 1), QColor(Qt::red));
+        // Red, but not necessarily pure #ff0000: newer MuPDF versions convert
+        // RGB to CMYK through ICC profiles.
+        auto reddish = [](QColor c) { return c.red() > 180 && c.green() < 100 && c.blue() < 100; };
+        QTRY_VERIFY2(reddish(shown(125, 125, 1)), qPrintable(shown(125, 125, 1).name()));
 
         // The ink readout works on whichever page is under the cursor.
         QTest::mouseMove(canvas, pos(125, 125, 1));
@@ -503,7 +506,7 @@ private slots:
         thumbs->setCurrentRow(0);
         QTRY_COMPARE(spin->value(), 1);
         QTRY_VERIFY(view->isComplete());
-        QTRY_COMPARE(shown(150, 150, 0), QColor(Qt::black));
+        QTRY_VERIFY2(shown(150, 150, 0).lightness() < 40, qPrintable(shown(150, 150, 0).name()));
 
         // Page Down goes to the next page.
         action("Next page")->trigger();
