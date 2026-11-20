@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(PrepressPdf VERSION 0.5.0 LANGUAGES C CXX)
+project(PrepressPdf VERSION 0.5.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -91,3 +91,9 @@ set_tests_properties(test_preflight PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offs
 add_executable(bench tests/bench.cpp)
 target_link_libraries(bench PRIVATE engine)
 target_compile_definitions(bench PRIVATE TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data")
+
+add_executable(test_hidpi tests/test_hidpi.cpp)
+target_link_libraries(test_hidpi PRIVATE ui Qt6::Test)
+target_compile_definitions(test_hidpi PRIVATE TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data")
+add_test(NAME test_hidpi COMMAND test_hidpi)
+set_tests_properties(test_hidpi PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

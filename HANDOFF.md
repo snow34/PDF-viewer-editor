@@ -75,9 +75,6 @@ Tag pushes also publish, but the Claude cloud sandbox cannot push tags (403).
 ### Phase 1 still open
 
 - Black-ink simulation.
-- HiDPI: tiles are drawn at one pixel per logical pixel, so they look soft on
-  screens with a scale factor above 1. Render at zoom x devicePixelRatio and
-  set the ratio on the tile images.
 - Rendering uses one thread (one `fz_context`). Several render threads need
   `fz_clone_context` with lock callbacks.
 - Opening reads every page's info (`Document::pageInfo`) before showing
@@ -159,6 +156,7 @@ tests/
   test_engine.cpp    ink values, overprint/knockout, boxes, PDF/X detection, profiles
   test_preflight.cpp one clean file, one file per violation: exact rule ids and bounds
   test_ui.cpp        drives the real MainWindow
+  test_hidpi.cpp     the window at scale factor 2: sharpness and readout per device pixel
 ```
 
 ### Rendering model (the core idea)
@@ -188,6 +186,16 @@ zoom, rotation or document change; anything from an older generation is dropped)
    and, after a zoom, the previous zoom's pictures stretched as placeholders
    until the page's visible tiles are sharp again.
 
+- HiDPI (v0.5.1): `PageView::zoom()` is logical pixels per point;
+  `renderZoom()` = zoom x `deviceScale()` (the screen's devicePixelRatio) is
+  what tiles are rendered at. **`TileKey` and tile areas count device
+  pixels**; painting divides by the scale. A move to a screen with another
+  scale retires the tiles (`checkDeviceScale`, from `QEvent::DevicePixelRatioChange`
+  on Qt >= 6.6 and from every paint as a fallback). Mouse positions keep
+  their fraction (`pageAt(QPointF)`) so readout resolves single device pixels.
+  Thumbnails are rendered at the list's scale too. Tested by
+  `tests/test_hidpi.cpp` (QT_SCALE_FACTOR=2, 0.5 pt stripes must alternate
+  black/white per device pixel); checked by eye at 1.5 for tile seams.
 - Ink readout: `MainWindow::showInkValues` looks the hovered pixel up in
   `m_store` and maps the tile's inks onto the document-wide list `m_allInks`
   (CMYK + every spot in the document, from `PageInfo::spots`).

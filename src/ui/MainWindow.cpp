@@ -706,7 +706,8 @@ void MainWindow::requestNextThumbnail(int page)
     o.visible.clear();
     o.hiddenInks.clear();
     o.showCoverage = false;
-    emit requestThumbnail(page, kThumbnailSize, m_rotation, o, m_thumbGeneration);
+    const double dpr = m_thumbnails->devicePixelRatioF();
+    emit requestThumbnail(page, qRound(kThumbnailSize * dpr), m_rotation, o, m_thumbGeneration);
 }
 
 void MainWindow::onThumbnail(int page, const QImage &image, int generation)
@@ -714,13 +715,19 @@ void MainWindow::onThumbnail(int page, const QImage &image, int generation)
     if (generation != m_thumbGeneration)
         return;
     if (!image.isNull() && page < m_thumbnails->count()) {
-        QPixmap framed(kThumbnailSize, kThumbnailSize);
+        // Drawn at the screen's pixel density, so thumbnails are sharp on HiDPI screens too.
+        const double dpr = m_thumbnails->devicePixelRatioF();
+        QImage page_ = image;
+        page_.setDevicePixelRatio(dpr);
+        const QSizeF size = QSizeF(image.size()) / dpr;
+        QPixmap framed(QSize(qRound(kThumbnailSize * dpr), qRound(kThumbnailSize * dpr)));
+        framed.setDevicePixelRatio(dpr);
         framed.fill(Qt::transparent);
         QPainter p(&framed);
-        const QPoint at((kThumbnailSize - image.width()) / 2, (kThumbnailSize - image.height()) / 2);
-        p.drawImage(at, image);
+        const QPointF at((kThumbnailSize - size.width()) / 2, (kThumbnailSize - size.height()) / 2);
+        p.drawImage(at, page_);
         p.setPen(QColor(120, 120, 120));
-        p.drawRect(QRect(at, image.size()).adjusted(0, 0, -1, -1));
+        p.drawRect(QRectF(at, size).adjusted(0, 0, -1, -1));
         p.end();
         QIcon icon(framed);
         icon.addPixmap(framed, QIcon::Selected); // no colour wash over the selected page
@@ -969,7 +976,7 @@ void MainWindow::scheduleTiles()
     if (render.isEmpty())
         return;
     m_worker->setLatestBatch(++m_batchId);
-    emit requestTiles(render, m_view->zoom(), m_rotation, generation, m_batchId);
+    emit requestTiles(render, m_view->renderZoom(), m_rotation, generation, m_batchId);
 }
 
 void MainWindow::onTileRendered(const TileKey &key, const engine::PageRender &render, int generation)
@@ -1022,9 +1029,9 @@ void MainWindow::showInkValues()
 {
     if (m_hoverPage < 0)
         return;
-    // The pixel under the cursor, and the tile that holds it.
-    const QPoint px(int(std::floor(m_hoverPoint.x() * m_view->zoom())),
-                    int(std::floor(m_hoverPoint.y() * m_view->zoom())));
+    // The device pixel under the cursor, and the tile that holds it.
+    const QPoint px(int(std::floor(m_hoverPoint.x() * m_view->renderZoom())),
+                    int(std::floor(m_hoverPoint.y() * m_view->renderZoom())));
     const TileKey key{ m_hoverPage, px.x() / TileKey::size, px.y() / TileKey::size };
     const auto it = m_store.constFind(key);
     if (it == m_store.constEnd() || !it->area.contains(px)) {

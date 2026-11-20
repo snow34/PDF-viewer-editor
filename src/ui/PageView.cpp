@@ -18,6 +18,7 @@ const int kMaxOldTiles = 120; // stretched placeholders from earlier zoom levels
 
 PageView::PageView(QWidget *parent) : QAbstractScrollArea(parent)
 {
+    m_dpr = devicePixelRatioF();
     viewport()->setMouseTracking(true);
     viewport()->setAutoFillBackground(true);
     viewport()->setBackgroundRole(QPalette::Dark);
@@ -115,14 +116,8 @@ void PageView::setZoom(double zoom, QPoint anchor)
     }
 
     // The current tiles become stretched placeholders until the new ones arrive.
-    if (zoom != m_zoom) {
-        for (auto it = m_tiles.constBegin(); it != m_tiles.constEnd(); ++it)
-            m_old.append({ it.key().page, it->area, m_zoom, it->image });
-        if (m_old.size() > kMaxOldTiles)
-            m_old.erase(m_old.begin(), m_old.begin() + (m_old.size() - kMaxOldTiles));
-        m_tiles.clear();
-        ++m_generation;
-    }
+    if (zoom != m_zoom)
+        retireTiles();
     m_zoom = zoom;
     relayout();
 
@@ -135,6 +130,36 @@ void PageView::setZoom(double zoom, QPoint anchor)
     updateCurrentPage();
     viewport()->update();
     emit viewChanged();
+}
+
+void PageView::retireTiles()
+{
+    for (auto it = m_tiles.constBegin(); it != m_tiles.constEnd(); ++it)
+        m_old.append({ it.key().page, it->area, renderZoom(), it->image });
+    if (m_old.size() > kMaxOldTiles)
+        m_old.erase(m_old.begin(), m_old.begin() + (m_old.size() - kMaxOldTiles));
+    m_tiles.clear();
+    ++m_generation;
+}
+
+void PageView::checkDeviceScale()
+{
+    const double dpr = devicePixelRatioF();
+    if (qFuzzyCompare(dpr, m_dpr))
+        return;
+    retireTiles();
+    m_dpr = dpr;
+    viewport()->update();
+    emit viewChanged(); // ask for tiles at the new density
+}
+
+void PageView::changeEvent(QEvent *event)
+{
+    QAbstractScrollArea::changeEvent(event);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 6, 0)
+    if (event->type() == QEvent::DevicePixelRatioChange)
+        checkDeviceScale();
+#endif
 }
 
 void PageView::updateCurrentPage()
@@ -184,20 +209,20 @@ QPoint PageView::widgetPos(int page, QPointF point) const
     return pageRect(page).topLeft() + QPoint(int(std::floor(point.x() * m_zoom)), int(std::floor(point.y() * m_zoom)));
 }
 
-bool PageView::pageAt(QPoint pos, int *page, QPointF *point) const
+bool PageView::pageAt(QPointF pos, int *page, QPointF *point) const
 {
-    const QPoint c = pos - origin();
-    auto it = std::upper_bound(m_tops.begin(), m_tops.end(), qint64(c.y()));
+    const QPointF c = pos - QPointF(origin());
+    auto it = std::upper_bound(m_tops.begin(), m_tops.end(), qint64(std::floor(c.y())));
     const int i = int(it - m_tops.begin()) - 1;
     if (i < 0 || i >= m_sizes.size())
         return false;
-    const QRect r = contentRect(i);
+    const QRectF r = contentRect(i);
     if (!r.contains(c))
         return false;
     if (page)
         *page = i;
     if (point)
-        *point = QPointF(c - r.topLeft()) / m_zoom;
+        *point = (c - r.topLeft()) / m_zoom;
     return true;
 }
 
@@ -210,9 +235,12 @@ QList<TileKey> PageView::tilesIn(int page, const QRect &columnArea) const
     const QRect local = columnArea.intersected(r).translated(-r.topLeft());
     if (local.isEmpty())
         return keys;
+    // Tiles are counted in device pixels.
     const int size = TileKey::size;
-    for (int row = local.top() / size; row <= local.bottom() / size; ++row)
-        for (int col = local.left() / size; col <= local.right() / size; ++col)
+    const int x0 = int(std::floor(local.left() * m_dpr)), y0 = int(std::floor(local.top() * m_dpr));
+    const int x1 = int(std::ceil((local.right() + 1) * m_dpr)) - 1, y1 = int(std::ceil((local.bottom() + 1) * m_dpr)) - 1;
+    for (int row = y0 / size; row <= y1 / size; ++row)
+        for (int col = x0 / size; col <= x1 / size; ++col)
             keys.append({ page, col, row });
     return keys;
 }
@@ -233,7 +261,7 @@ QList<TileKey> PageView::wantedTiles(bool ahead) const
     // Nearest the middle of the window first.
     const QPoint middle = -origin() + viewport()->rect().center();
     auto distance = [&](const TileKey &k) {
-        const QPoint c = contentRect(k.page).topLeft() + k.area().center();
+        const QPoint c = contentRect(k.page).topLeft() + (QPointF(k.area().center()) / m_dpr).toPoint();
         return qint64(c.x() - middle.x()) * (c.x() - middle.x()) + qint64(c.y() - middle.y()) * (c.y() - middle.y());
     };
     std::stable_sort(keys.begin(), keys.end(),
@@ -265,7 +293,8 @@ void PageView::setTile(const TileKey &key, int generation, const QImage &image, 
 
     if (m_tiles.size() > kMaxTiles)
         evict();
-    viewport()->update(QRect(pageRect(key.page).topLeft() + area.topLeft(), area.size()));
+    const QRectF logical(QPointF(area.topLeft()) / m_dpr, QSizeF(area.size()) / m_dpr);
+    viewport()->update(logical.toAlignedRect().translated(pageRect(key.page).topLeft()).adjusted(-1, -1, 1, 1));
 }
 
 void PageView::evict()
@@ -307,6 +336,7 @@ void PageView::setSelection(int page, const QRectF &bounds)
 
 void PageView::paintEvent(QPaintEvent *event)
 {
+    checkDeviceScale(); // for Qt versions without a scale-change event
     if (m_sizes.isEmpty())
         return;
     QPainter p(viewport());
@@ -323,17 +353,21 @@ void PageView::paintEvent(QPaintEvent *event)
         p.fillRect(r, Qt::white);
 
         // Stretched tiles from earlier zoom levels, then the sharp ones on top.
+        // A placeholder's area divided by the render zoom it was made at is
+        // in points; times the current zoom it is in logical pixels.
         for (const OldTile &t : m_old) {
             if (t.page != page)
                 continue;
-            const double s = m_zoom / t.zoom;
+            const double s = m_zoom / t.renderZoom; // device pixels then -> logical pixels now
             p.drawImage(QRectF(QPointF(r.topLeft()) + QPointF(t.area.topLeft()) * s, QSizeF(t.area.size()) * s),
-                        t.image);
+                        t.image, QRectF(QPointF(0, 0), QSizeF(t.image.size())));
         }
         for (const TileKey &k : tilesIn(page, columnArea)) {
             const auto it = m_tiles.constFind(k);
             if (it != m_tiles.constEnd())
-                p.drawImage(r.topLeft() + it->area.topLeft(), it->image);
+                p.drawImage(QRectF(QPointF(r.topLeft()) + QPointF(it->area.topLeft()) / m_dpr,
+                                   QSizeF(it->area.size()) / m_dpr),
+                            it->image, QRectF(QPointF(0, 0), QSizeF(it->image.size())));
         }
         p.setPen(QColor(120, 120, 120));
         p.drawRect(r.adjusted(-1, -1, 0, 0));
@@ -400,7 +434,7 @@ void PageView::mouseMoveEvent(QMouseEvent *e)
     }
     int page;
     QPointF point;
-    if (pageAt(e->position().toPoint(), &page, &point))
+    if (pageAt(e->position(), &page, &point))
         emit hovered(page, point);
     else
         emit hoverLeft();
@@ -417,7 +451,7 @@ void PageView::mousePressEvent(QMouseEvent *e)
     }
     int page;
     QPointF point;
-    if (e->button() == Qt::LeftButton && pageAt(e->position().toPoint(), &page, &point))
+    if (e->button() == Qt::LeftButton && pageAt(e->position(), &page, &point))
         emit clicked(page, point);
 }
 

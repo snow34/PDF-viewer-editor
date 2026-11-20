@@ -63,6 +63,9 @@ their title to another side or out into their own window.
   the font and a stand-in is shown. A printer may reject such a file.
 - A box only appears if the file defines it. A page without a CropBox is
   cropped to its MediaBox, so the Crop switch then shows the page edge.
+- On screens with display scaling (for example Windows at 150 % or 200 %),
+  pages and thumbnails are drawn at the screen's full resolution, and the ink
+  readout works on single screen pixels.
 - While you zoom, the page is first shown slightly blurred and then sharpens
   within a moment: only the part on screen is drawn at the new size.
 - If no CMYK profile is selected, colours on screen are only approximate and
@@ -225,8 +228,7 @@ them correctly.
 
 ## What is planned
 
-1. **Rest of the viewer:** a macOS version, sharper display on high-resolution
-   (HiDPI) screens.
+1. **Rest of the viewer:** a macOS version.
 2. **Preflight fix-ups:** repair what the check finds (convert colours,
    embed fonts, set page boxes, set the output intent), and PDF/X-6.
 3. **Editing:** move, delete and recolour objects; reorder and rotate pages —

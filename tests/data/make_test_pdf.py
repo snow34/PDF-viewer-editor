@@ -214,3 +214,14 @@ write(out_dir + "/x1a_two_pages.pdf", [
     b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /TrimBox [10 10 290 290] /Contents 7 0 R >>",
     stream(b"1 0 0 rg 100 100 50 50 re f"),
 ], b"/Info 5 0 R")
+
+# stripes.pdf: vertical black stripes 0.5 pt wide every 1 pt, from x = 50 to
+# 250, y = 100 to 200. At 2 device pixels per point each stripe is exactly one
+# device pixel: only visible if the page is rendered at full screen density.
+STRIPES = b"0 0 0 1 k " + b" ".join(b"%g 100 0.5 100 re" % (50 + i) for i in range(200)) + b" f"
+write(out_dir + "/stripes.pdf", [
+    b"<< /Type /Catalog /Pages 2 0 R >>",
+    PAGES,
+    b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R >>",
+    stream(STRIPES),
+])

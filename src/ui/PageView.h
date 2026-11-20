@@ -7,6 +7,11 @@
 //
 // Positions on a page are given in view points: 1/72 inch, origin at the
 // page's top-left corner, y down, with the view rotation already applied.
+//
+// Zoom is in logical pixels (what Qt lays out). On a screen with a scale
+// factor (Windows display scaling, Retina) tiles are rendered in device
+// pixels, zoom x deviceScale(), so the page is as sharp as the screen allows.
+// TileKey and tile areas count device pixels.
 #pragma once
 
 #include "TileKey.h"
@@ -29,6 +34,10 @@ public:
     // centre when omitted) stays where it is.
     void setZoom(double zoom, QPoint anchor = QPoint(-1, -1));
     double zoom() const { return m_zoom; }
+    // Device pixels per logical pixel on the screen the view is on.
+    double deviceScale() const { return m_dpr; }
+    // Pixels per point for rendering: zoom() x deviceScale().
+    double renderZoom() const { return m_zoom * m_dpr; }
     // Changes whenever existing tiles stop being valid (new zoom, new pages).
     int generation() const { return m_generation; }
 
@@ -39,14 +48,16 @@ public:
     void centerOn(int page, QPointF point);
     // Viewport position of a point on a page, and the reverse.
     QPoint widgetPos(int page, QPointF point) const;
-    bool pageAt(QPoint pos, int *page, QPointF *point) const;
+    // `pos` keeps its fraction: on a scaled screen the mouse position is
+    // finer than one logical pixel.
+    bool pageAt(QPointF pos, int *page, QPointF *point) const;
     QRect pageRect(int page) const; // where the page is drawn, viewport coordinates
 
     // Tiles needed for what is on screen, nearest the middle first.
     // `ahead` adds a band of tiles around the window so scrolling finds them ready.
     QList<TileKey> wantedTiles(bool ahead) const;
     bool hasTile(const TileKey &key) const { return m_tiles.contains(key); }
-    // `area` is the part of the page the image covers, in pixels.
+    // `area` is the part of the page the image covers, in device pixels.
     void setTile(const TileKey &key, int generation, const QImage &image, const QRect &area);
     // True when every tile on screen has arrived.
     bool isComplete() const;
@@ -83,6 +94,7 @@ protected:
     void wheelEvent(QWheelEvent *event) override;
     void dragEnterEvent(QDragEnterEvent *event) override;
     void dropEvent(QDropEvent *event) override;
+    void changeEvent(QEvent *event) override;
 
 private:
     struct Tile {
@@ -91,8 +103,8 @@ private:
     };
     struct OldTile {
         int page;
-        QRect area;
-        double zoom;
+        QRect area;         // device pixels at `renderZoom`
+        double renderZoom;
         QImage image;
     };
 
@@ -103,6 +115,9 @@ private:
     QList<TileKey> tilesIn(int page, const QRect &columnArea) const;
     void updateCurrentPage();
     void evict();
+    // Notices a move to a screen with another scale factor.
+    void checkDeviceScale();
+    void retireTiles(); // current tiles become placeholders; new generation
 
     QList<QSizeF> m_sizes;
     QList<engine::PageBoxes> m_boxes;
@@ -110,6 +125,7 @@ private:
     qint64 m_columnHeight = 0;
     int m_columnWidth = 0;
     double m_zoom = 1.0;
+    double m_dpr = 1.0;
     int m_generation = 0;
     int m_currentPage = 0;
 
