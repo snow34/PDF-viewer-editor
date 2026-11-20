@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(PrepressPdf VERSION 0.4.1 LANGUAGES C CXX)
+project(PrepressPdf VERSION 0.5.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -42,6 +42,7 @@ add_library(engine STATIC
     src/engine/MuPdfUtil.h
     src/preflight/Types.h src/preflight/Report.cpp
     src/preflight/Preflight.cpp src/preflight/Preflight.h
+    src/preflight/Xmp.cpp src/preflight/Xmp.h
 )
 target_include_directories(engine PUBLIC src)
 target_link_libraries(engine PUBLIC Qt6::Gui PRIVATE mupdf PkgConfig::LCMS2)

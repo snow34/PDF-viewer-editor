@@ -1,11 +1,12 @@
 #include "CompositeWorker.h"
 
-void CompositeWorker::compose(const std::shared_ptr<engine::SeparatedImage> &image,
-                              const engine::CompositeOptions &options, int requestId)
+void CompositeWorker::composeTile(const TileKey &key, int generation, int optionsId,
+                                  const std::shared_ptr<engine::SeparatedImage> &image, const QRect &area,
+                                  const engine::CompositeOptions &options)
 {
-    if (!image || requestId < m_latest.load())
-        return; // a newer request is already waiting
+    if (!image || optionsId < m_latest.load())
+        return; // the settings changed; the tile is queued again with the new ones
     bool calibrated = false;
     const QImage result = engine::composite(*image, options, &calibrated);
-    emit composed(result, calibrated, requestId);
+    emit tileComposed(key, generation, optionsId, result, area, calibrated);
 }

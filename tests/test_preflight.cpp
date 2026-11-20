@@ -1,5 +1,6 @@
 #include "engine/Document.h"
 #include "preflight/Preflight.h"
+#include "preflight/Xmp.h"
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -141,6 +142,61 @@ private slots:
         const QStringList asX3 = rules(check("x4_no_profile.pdf", Standard::X3_2003));
         QVERIFY(asX3.contains("transparency.opacity"));
         QVERIFY(asX3.contains("id.missing"));
+    }
+
+    void comparedWithAcrobat()
+    {
+        // The same problems Acrobat Preflight reported for a real file (PDF/X-4 profile).
+        const Report r = check("x4_acrobat_comparison.pdf", Standard::X4);
+        QVERIFY2(rules(r)
+                     == (QStringList{ "box.trimMissing", "id.missing", "intent.missing", "meta.infoXmpMismatch",
+                                      "meta.renditionClass", "meta.title", "meta.trapped", "meta.versionId",
+                                      "meta.xmpPrefix" }),
+                 qPrintable(dump(r)));
+        QStringList prefixes, mismatches;
+        QList<int> trimPages;
+        for (const Finding &f : r.findings) {
+            if (f.ruleId == QLatin1String("meta.xmpPrefix"))
+                prefixes << f.message;
+            if (f.ruleId == QLatin1String("meta.infoXmpMismatch"))
+                mismatches << f.message;
+            if (f.ruleId == QLatin1String("box.trimMissing"))
+                trimPages << f.page;
+        }
+        QCOMPARE(trimPages, (QList<int>{ 0, 1, 2 }));
+        QCOMPARE(prefixes.size(), 2);
+        QVERIFY(prefixes.join('\n').contains("XMP Basic schema in the XMP metadata uses the prefix \"xap\""));
+        QVERIFY(prefixes.join('\n').contains("XMP Media Management schema in the XMP metadata uses the prefix \"xapMM\""));
+        QCOMPARE(mismatches.size(), 2);
+        QVERIFY(mismatches.join('\n').contains("Creator differs"));
+        QVERIFY(mismatches.join('\n').contains("Producer is set in the document information"));
+        // Dates are read whatever the prefix, and they agree: no date findings.
+        QVERIFY(!rules(r).contains("meta.creationDate"));
+        for (const Finding &f : r.findings)
+            QVERIFY(!f.message.contains("CreationDate") && !f.message.contains("ModDate"));
+    }
+
+    void xmpReader()
+    {
+        const Xmp x = parseXmp(QStringLiteral(
+            "<x:xmpmeta xmlns:x='adobe:ns:meta/'><rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>"
+            "<rdf:Description rdf:about='' xmlns:d='http://purl.org/dc/elements/1.1/' "
+            "xmlns:mm='http://ns.adobe.com/xap/1.0/mm/' mm:VersionID='7'>"
+            "<d:title><rdf:Alt><rdf:li xml:lang='de'>Titel</rdf:li><rdf:li xml:lang='x-default'>Title</rdf:li>"
+            "</rdf:Alt></d:title><d:creator><rdf:Seq><rdf:li>Ann</rdf:li><rdf:li>Bo</rdf:li></rdf:Seq></d:creator>"
+            "</rdf:Description></rdf:RDF></x:xmpmeta>"));
+        QVERIFY(x.present && x.readable);
+        QCOMPARE(x.value(xmpns::dc, "title"), QStringLiteral("Title")); // the x-default entry
+        QCOMPARE(x.value(xmpns::dc, "creator"), QStringLiteral("Ann"));
+        QCOMPARE(x.value(xmpns::xmpMM, "VersionID"), QStringLiteral("7")); // attribute form
+        QVERIFY(x.prefixes.contains(qMakePair(QStringLiteral("mm"), xmpns::xmpMM)));
+        QVERIFY(!parseXmp("<x:xmpmeta xmlns:x='adobe:ns:meta/'><a></b>").readable);
+        QVERIFY(!parseXmp("  ").present);
+
+        QCOMPARE(parsePdfDate("D:20240101020000+02'00'"), parseXmpDate("2024-01-01T00:00:00Z"));
+        QCOMPARE(parsePdfDate("D:20240315"), parseXmpDate("2024-03-15"));
+        QCOMPARE(parsePdfDate("D:20240101000000-05'30'"), parseXmpDate("2024-01-01T05:30:00Z"));
+        QVERIFY(!parsePdfDate("yesterday").isValid());
     }
 
     void manyIdenticalFindingsAreSummarised()

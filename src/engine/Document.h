@@ -4,9 +4,13 @@
 #include "Types.h"
 
 #include <memory>
+#include <vector>
 
 struct fz_context;
 struct fz_document;
+struct fz_page;
+struct fz_display_list;
+struct fz_separations;
 
 namespace engine {
 
@@ -25,6 +29,12 @@ public:
     // output intent when it has one, in DeviceCMYK otherwise.
     // `rotation` turns the view clockwise by 0, 90, 180 or 270 degrees.
     PageRender render(int page, double zoom, int rotation = 0);
+    // Renders only `area` of the page (pixels at `zoom`, origin at the page's
+    // top-left corner). The result is clipped to the page.
+    PageRender renderTile(int page, double zoom, int rotation, const QRect &area);
+
+    // Size, boxes and spot colours of a page, without rendering it.
+    PageInfo pageInfo(int page);
 
     // Page size in points, display orientation, before view rotation.
     QSizeF pageSize(int page);
@@ -45,9 +55,22 @@ private:
     Document() = default;
     void readInfo(const QString &path);
 
+    // A page prepared for drawing: kept for the last few pages used, so
+    // drawing many tiles of one page does not interpret the page each time.
+    struct Prepared {
+        int page = -1;
+        fz_page *fzPage = nullptr;
+        fz_display_list *list = nullptr;
+        fz_separations *seps = nullptr;
+        PageBoxes boxes; // rotation 0
+    };
+    Prepared *prepare(int page); // throws a MuPDF error on failure
+    void dropPrepared(Prepared &p);
+
     fz_context *m_ctx = nullptr;
     fz_document *m_doc = nullptr;
     DocumentInfo m_info;
+    std::vector<Prepared> m_prepared; // most recently used first
 };
 
 } // namespace engine

@@ -50,6 +50,8 @@ Tag pushes also publish, but the Claude cloud sandbox cannot push tags (403).
 - Separations list with per-plate show/hide; single plate shown as grey.
 - Ink % under cursor, total area coverage, 1/3x3/5x5 sampling.
 - Coverage highlight above a limit.
+- Continuous scrolling with tile rendering (v0.5.0): see "Rendering model".
+- PDF/X-4 XMP rules matched to an Acrobat Preflight comparison (v0.5.0).
 - Per-box overlay switches (trim, bleed, crop, art, media) and middle-button panning.
 - PDF/X preflight (verification only): five standards, clickable findings,
   PDF/HTML/JSON report, command-line mode. See "Preflight" below.
@@ -72,13 +74,14 @@ Tag pushes also publish, but the Claude cloud sandbox cannot push tags (403).
 
 ### Phase 1 still open
 
-- **Continuous scrolling and large-sheet rendering.** These are one redesign:
-  `PageView` shows exactly one fully rendered page (`MainWindow::m_render`),
-  and ink readout, the inspector overlay and search highlights all assume
-  that. Continuous scrolling needs a multi-page layout with a render per
-  visible page; large sheets need rendering only the visible region instead
-  of the whole page (today capped at 32 megapixels by `kMaxPixels`).
-- Black-ink simulation, HiDPI rendering.
+- Black-ink simulation.
+- HiDPI: tiles are drawn at one pixel per logical pixel, so they look soft on
+  screens with a scale factor above 1. Render at zoom x devicePixelRatio and
+  set the ratio on the tile images.
+- Rendering uses one thread (one `fz_context`). Several render threads need
+  `fz_clone_context` with lock callbacks.
+- Opening reads every page's info (`Document::pageInfo`) before showing
+  anything; for documents with thousands of pages make that lazy.
 - Monitor profile detection on Linux and macOS; per-screen profiles.
 - Bundled press profiles (licence must be confirmed per profile).
 - Dock layout and main window geometry are not saved between sessions.
@@ -137,13 +140,15 @@ src/engine/   no widgets; QtGui types only
 src/ui/
   RenderWorker       owns the Document on a worker thread; all MuPDF calls happen there
                      (page renders, thumbnails, search, object inspection)
-  MainWindow         glue: requests renders, recomposites, menus, status bar
-  PageView           scroll area + PageCanvas (image, box overlays, hover)
+  MainWindow         glue: schedules tiles, keeps their ink channels, menus, status bar
+  PageView           QAbstractScrollArea: all pages in one column, painted from tiles;
+                     overlays (boxes, search, selection); hover/click/pan/zoom input
+  TileKey.h          (page, column, row) of a 512 x 512 pixel tile
   OutputPreviewPanel profile, plates, ink readout, coverage. Shown in a floating,
                      non-dockable QDockWidget ("outputPreview") owned by MainWindow:
                      the owner wants it as a separate draggable window
   ProfileDialog      profile management
-  CompositeWorker    ink channels -> screen image on its own thread
+  CompositeWorker    ink channels -> screen image per tile, on its own thread
   PreflightPanel     standard selector, Check/Stop, findings tree, report export
 src/preflight/       compiled into the engine library
   Types.h, Report.cpp  Standard, Finding, Report; HTML and JSON export
@@ -158,16 +163,41 @@ tests/
 
 ### Rendering model (the core idea)
 
-`Document::render` renders once into a pixmap of CMYK + one channel per spot
-(`fz_page_separations`, every separation set to `FZ_SEPARATION_SPOT`). The
-pixmap colourspace is the document's CMYK output intent if it has one,
-otherwise DeviceCMYK, so DeviceCMYK numbers in the file arrive unchanged.
-Everything else derives from that buffer on the UI thread:
+`Document::renderTile(page, zoom, rotation, area)` renders one rectangle of a
+page into a pixmap of CMYK + one channel per spot (`fz_page_separations`,
+every separation set to `FZ_SEPARATION_SPOT`). The pixmap colourspace is the
+document's CMYK output intent if it has one, otherwise DeviceCMYK, so
+DeviceCMYK numbers in the file arrive unchanged. The last 6 pages used are kept
+prepared (`Document::Prepared`: page, display list, separations, boxes), and a
+tile is drawn by playing the display list with the tile as scissor. Note: the
+transform goes to `fz_run_display_list`, the draw device gets identity, so the
+scissor is in pixels (the other way round only the first tile is right).
+`render()` is `renderTile` with an unlimited area (thumbnails, tests).
 
-- ink readout reads the channels (`inkValues`);
-- toggling plates or coverage calls `composite` again, no re-render;
-- display = spots folded into CMYK via their CMYK equivalents (multiply),
+Pipeline, all keyed by `TileKey` and the view's **generation** (bumped on every
+zoom, rotation or document change; anything from an older generation is dropped):
+
+1. `PageView::viewChanged` -> `MainWindow::scheduleTiles` (coalesced with a
+   0 ms timer) -> one batch of all missing wanted tiles, nearest the middle
+   first, to `RenderWorker::renderTiles`. A newer batch id stops the older
+   batch between tiles. Tile arrivals never trigger scheduling (no loops).
+2. `tileRendered` -> `MainWindow::m_store` (ink channels, at most 160 tiles,
+   evicting tiles that are not wanted) -> `CompositeWorker::composeTile` with
+   the current display settings (`m_options`, id `m_optionsId`).
+3. `tileComposed` -> `PageView::setTile`. The view keeps at most 160 pictures
+   and, after a zoom, the previous zoom's pictures stretched as placeholders
+   until the page's visible tiles are sharp again.
+
+- Ink readout: `MainWindow::showInkValues` looks the hovered pixel up in
+  `m_store` and maps the tile's inks onto the document-wide list `m_allInks`
+  (CMYK + every spot in the document, from `PageInfo::spots`).
+- Toggling plates, coverage or profiles: `recomposite()` re-composites every
+  stored tile (on-screen first); no re-render. Plates are hidden **by name**
+  (`CompositeOptions::hiddenInks`) because spot channels differ per page.
+- Display = spots folded into CMYK via their CMYK equivalents (multiply),
   then lcms2 CMYK -> monitor RGB using the simulation profile.
+- Cost: about 20 ms to render and composite a full 1920 x 1080 window at any
+  zoom (`./build/bench`), against 540 ms for one 60 MP page before.
 
 Consequence: the simulation profile changes appearance only, never ink numbers.
 Overprint cannot be switched off (MuPDF applies it when the target has
@@ -205,7 +235,12 @@ built-in `PDF_NAME(...)` constants differs between MuPDF versions.
 | `file.version` | Warning | header version above 1.3 (2001/2002), 1.4 (2003), 1.6 (X-4) |
 | `intent.missing`, `intent.multiple`, `intent.identifier`, `intent.profile`, `intent.profileInvalid`, `intent.profileClass` | Error | all (embedded profile mandatory for X-4; registry name accepted otherwise) |
 | `intent.profileSpace` | Error | X-1a (profile must be CMYK) |
-| `meta.title`, `meta.creationDate`, `meta.modDate`, `meta.trapped` | Error | all (Info dict or XMP) |
+| `meta.title`, `meta.trapped` | Error | X-1a, X-3: Info dict or XMP. X-4: XMP only (`dc:title`, `pdf:Trapped`) |
+| `meta.creationDate`, `meta.modDate` | Error | all (Info dict or XMP) |
+| `meta.versionId`, `meta.renditionClass` | Error | X-4 (`xmpMM:VersionID`, `xmpMM:RenditionClass`) |
+| `meta.xmpPrefix` | Error for `xmp`, `xmpMM`; Warning for `dc`, `pdf`, `pdfxid` | X-4 |
+| `meta.infoXmpMismatch` | Error | X-4: Info entries (Title, Author, Subject, Keywords, Creator, Producer, dates, Trapped) must be in and equal to XMP |
+| `meta.xmpInvalid` | Error | X-4: XMP is not well-formed XML |
 | `meta.xmp` | Error | X-4 |
 | `box.mediaMissing`, `box.trimMissing`, `box.trimAndArt`, `box.nesting` | Error | all |
 | `font.notEmbedded` | Error | all |
@@ -228,14 +263,23 @@ least certain, which is why most are warnings:
 - `forbidden.lzw`, `forbidden.jbig2`: which editions forbid which filters.
 - `forbidden.action`, `forbidden.embeddedFiles`, `forbidden.alternates`: exact scope.
 - `color.spotAlternate`: restrictions on alternate spaces.
-- `meta.*` for X-4: which XMP properties are mandatory.
+- `meta.*` for X-4: **confirmed by Acrobat Preflight** (owner's comparison, a
+  14-page file, PDF/X-4 profile): `meta.title` (XMP), `meta.trapped` (XMP),
+  `meta.versionId`, `meta.renditionClass`, `meta.xmpPrefix` for `xmp` and
+  `xmpMM`, `meta.infoXmpMismatch` for Creator and Producer. Rebuilt as
+  `tests/data/x4_acrobat_comparison.pdf`; our report on it equals Acrobat's
+  list. Not confirmed: the prefix rule for `dc`/`pdf`/`pdfxid` (warnings), the
+  other Info/XMP pairs, `xmpMM:DocumentID` (not checked; Acrobat did not
+  report it, the file may have had one).
+- XMP is read with `preflight::parseXmp` (`src/preflight/Xmp.cpp`), by
+  namespace URI, so values are found whatever prefix a file uses.
 - `transparency.group`: reported as an error for any group MuPDF opens.
 - Not checked at all: rendering intents, halftones (`HTP`), DeviceN details,
   overprint mode rules, X-4 layer (OCG) configuration rules, trap networks,
   `OutputCondition` vs registry contents, X-4p/X-5 external profiles, X-6.
 
-Validation so far: the committed test files, and a PDF/X-3:2002 file made by
-Ghostscript (`gs -dPDFX` with a customised `PDFX_def.ps`) which passes with no
+Validation so far: the owner's Acrobat comparison above, the committed test
+files, and a PDF/X-3:2002 file made by Ghostscript (`gs -dPDFX` with a customised `PDFX_def.ps`) which passes with no
 findings. The owner has Acrobat Pro and PitStop and was asked to compare
 results on real files; adjust rules from that feedback.
 
@@ -279,10 +323,8 @@ screen update when zoomed in, repeated for every plate toggle; the colour
 transform was rebuilt and the profile files re-read on every update and every
 thumbnail. What changed:
 
-- `CompositeWorker` (own thread, latest request wins). `MainWindow` keeps three
-  renders: `m_render` (newest), `m_pending` (being composited), `m_shown` (on
-  screen). **Ink readout must use `m_shown`**, because the picture on screen
-  can be one step behind.
+- `CompositeWorker` (own thread). Since v0.5.0 it works per tile; see
+  "Rendering model".
 - `composite()`: transform cached (`transformFor`, shared across threads, built
   with `cmsFLAGS_NOCACHE`), rows split across cores, whole-number arithmetic,
   and each run of equal pixels in a row converted once.
@@ -290,11 +332,11 @@ thumbnail. What changed:
   pages gain only the multi-core factor (about 550 ms at 60 MP on 4 cores).
 - Thumbnails are composited on the render thread; profile bytes and the system
   monitor profile are cached in `MainWindow`; fit-on-resize is debounced.
-- `kMaxPixels` lowered from 60 to 32 megapixels.
+- v0.5.0 replaced whole-page rendering by tiles, which removed the pixel
+  limit (`kMaxPixels` is gone).
 
 Not verified on the owner's machine or files. If it is still slow, ask which
-action is slow and for the file's page size and page count. The real fix for
-large sheets is rendering only the visible region (phase 1 leftover below).
+action is slow and for the file's page size and page count.
 
 ## Coordinates and rotation
 
@@ -316,10 +358,11 @@ rendered area, y down, view rotation already applied (`viewMatrix` in
 - **MuPDF's pkg-config file on Ubuntu is wrong** (old version, missing libs).
   `CMakeLists.txt` finds the static libs and their dependencies by hand. The
   dependency `-dev` packages listed above are all required for linking.
-- `test_ui.cpp` assumes `PageCanvas::margin == 12` and a 300 pt test page.
-- Stale renders are dropped by request id (`RenderWorker::setLatestRequest`,
-  `MainWindow::m_requestId`).
-- Rendered size is capped at 60 megapixels (`kMaxPixels` in `MainWindow.cpp`).
+- `test_ui.cpp` assumes 300 pt test pages and gets positions from
+  `PageView::widgetPos`; wait for `PageView::isComplete()` before reading pixels.
+- Stale work is dropped by id: tile batches (`RenderWorker::setLatestBatch`),
+  composites (`CompositeWorker::setLatestOptions`) and the view generation.
+- Zoom is capped at 64x, and lower when the whole column of pages would exceed what a scroll bar can address (`MainWindow::setZoom`).
 - QSettings keys: `recentFiles`, `simulationProfile`, `monitorProfile`,
   `coverageLimit`, `showBox/trim|bleed|crop|art|media` (`showBoxes` is the old single switch), `outputPreviewGeometry`, `outputPreviewVisible`,
   `devMode`.

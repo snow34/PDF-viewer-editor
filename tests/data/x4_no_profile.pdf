@@ -16,21 +16,25 @@ stream
 endstream
 endobj
 5 0 obj
-<< /Type /Metadata /Subtype /XML /Length 620 >>
+<< /Type /Metadata /Subtype /XML /Length 763 >>
 stream
-<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:pdfxid="http://www.npes.org/pdfx/ns/id/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:pdf="http://ns.adobe.com/pdf/1.3/"><pdfxid:GTS_PDFXVersion>PDF/X-4</pdfxid:GTS_PDFXVersion><dc:title><rdf:Alt><rdf:li xml:lang="x-default">Test</rdf:li></rdf:Alt></dc:title><xmp:CreateDate>2024-01-01T00:00:00Z</xmp:CreateDate><xmp:ModifyDate>2024-01-01T00:00:00Z</xmp:ModifyDate><pdf:Trapped>False</pdf:Trapped></rdf:Description></rdf:RDF></x:xmpmeta>
+<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:pdfxid="http://www.npes.org/pdfx/ns/id/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:pdf="http://ns.adobe.com/pdf/1.3/" xmlns:xmpMM="http://ns.adobe.com/xap/1.0/mm/" xmpMM:VersionID="1" xmpMM:RenditionClass="default"><pdfxid:GTS_PDFXVersion>PDF/X-4</pdfxid:GTS_PDFXVersion><dc:title><rdf:Alt><rdf:li xml:lang="x-default">Test</rdf:li></rdf:Alt></dc:title><xmp:CreateDate>2024-01-01T00:00:00Z</xmp:CreateDate><xmp:ModifyDate>2024-01-01T00:00:00Z</xmp:ModifyDate><xmp:CreatorTool>Test writer</xmp:CreatorTool><pdf:Trapped>False</pdf:Trapped></rdf:Description></rdf:RDF></x:xmpmeta>
 endstream
 endobj
+6 0 obj
+<< /Title (Test) /Creator (Test writer) /CreationDate (D:20240101000000Z) /ModDate (D:20240101020000+02'00') /Trapped /False >>
+endobj
 xref
-0 6
+0 7
 0000000000 65535 f 
 0000000015 00000 n 
 0000000233 00000 n 
 0000000290 00000 n 
 0000000472 00000 n 
 0000000558 00000 n 
+0000001402 00000 n 
 trailer
-<< /Size 6 /Root 1 0 R  >>
+<< /Size 7 /Root 1 0 R /Info 6 0 R >>
 startxref
-1259
+1545
 %%EOF

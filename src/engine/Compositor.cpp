@@ -84,6 +84,9 @@ QImage composite(const SeparatedImage &image, const CompositeOptions &o, bool *c
     const int w = image.width;
     const int h = image.height;
     std::vector<bool> visible = o.visible;
+    if (visible.empty() && !o.hiddenInks.isEmpty())
+        for (const QString &ink : image.inks)
+            visible.push_back(!o.hiddenInks.contains(ink));
     visible.resize(size_t(n), true);
     const int visibleCount = int(std::count(visible.begin(), visible.end(), true));
     int single = -1;

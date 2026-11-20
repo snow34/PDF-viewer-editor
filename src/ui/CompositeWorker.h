@@ -1,7 +1,8 @@
-// Turns rendered ink channels into the image shown on screen, on its own
-// thread so the window stays responsive while a large page is converted.
+// Turns rendered ink channels into the pictures shown on screen, on its own
+// thread so the window stays responsive.
 #pragma once
 
+#include "TileKey.h"
 #include "engine/Compositor.h"
 
 #include <QImage>
@@ -13,15 +14,18 @@
 class CompositeWorker : public QObject {
     Q_OBJECT
 public:
-    // Called from the UI thread: requests older than this id are skipped.
-    void setLatestRequest(int id) { m_latest.store(id); }
+    // Called from the UI thread when the display settings change: tiles
+    // queued with older settings are skipped.
+    void setLatestOptions(int id) { m_latest.store(id); }
 
 public slots:
-    void compose(const std::shared_ptr<engine::SeparatedImage> &image, const engine::CompositeOptions &options,
-                 int requestId);
+    void composeTile(const TileKey &key, int generation, int optionsId,
+                     const std::shared_ptr<engine::SeparatedImage> &image, const QRect &area,
+                     const engine::CompositeOptions &options);
 
 signals:
-    void composed(const QImage &image, bool calibrated, int requestId);
+    void tileComposed(const TileKey &key, int generation, int optionsId, const QImage &image, const QRect &area,
+                      bool calibrated);
 
 private:
     std::atomic<int> m_latest{ 0 };

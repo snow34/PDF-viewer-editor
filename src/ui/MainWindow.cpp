@@ -10,6 +10,7 @@
 
 #include <QApplication>
 
+#include <cmath>
 #include <tuple>
 #include <QDesktopServices>
 #include <QHBoxLayout>
@@ -28,20 +29,19 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QScreen>
+#include <QSet>
 #include <QScrollBar>
 #include <QSettings>
 #include <QSpinBox>
 #include <QStatusBar>
+#include <QStyle>
 #include <QTimer>
 #include <QToolBar>
 
 namespace {
 const double kMinZoom = 0.05;
 const double kMaxZoom = 64.0;
-// Upper limit for one rendered page. It bounds memory (about 8 bytes per pixel)
-// and the time every screen update takes; it also limits how far large
-// sheets can be zoomed until only the visible part is rendered.
-const double kMaxPixels = 32e6;
+const int kMaxStoredTiles = 160; // ink channels kept, about 1 MB each with four inks
 const double kMmPerPoint = 25.4 / 72.0;
 const int kThumbnailSize = 120;
 } // namespace
@@ -54,6 +54,10 @@ MainWindow::MainWindow(bool safeMode) : m_safeMode(safeMode)
     qRegisterMetaType<QList<engine::SearchHit>>();
     qRegisterMetaType<QList<engine::ObjectInfo>>();
     qRegisterMetaType<preflight::Report>();
+    qRegisterMetaType<engine::PageInfo>();
+    qRegisterMetaType<QList<engine::PageInfo>>();
+    qRegisterMetaType<TileKey>();
+    qRegisterMetaType<QList<TileKey>>();
 
     // Created before anything that can make the system send a resize event:
     // on Windows that happens while the panels below are still being built.
@@ -63,9 +67,15 @@ MainWindow::MainWindow(bool safeMode) : m_safeMode(safeMode)
     m_resizeTimer->setSingleShot(true);
     m_resizeTimer->setInterval(120);
     connect(m_resizeTimer, &QTimer::timeout, this, [this] {
-        if (m_fit)
-            render();
+        if (m_fit && m_info.pageCount > 0)
+            setZoom(fitZoom());
     });
+    // Scrolling produces many small view changes; tiles are asked for once
+    // per pass of the event loop.
+    m_scheduleTimer = new QTimer(this);
+    m_scheduleTimer->setSingleShot(true);
+    m_scheduleTimer->setInterval(0);
+    connect(m_scheduleTimer, &QTimer::timeout, this, &MainWindow::scheduleTiles);
 
     setWindowTitle(QApplication::applicationDisplayName());
     resize(1200, 820);
@@ -167,9 +177,9 @@ MainWindow::MainWindow(bool safeMode) : m_safeMode(safeMode)
     m_worker->moveToThread(&m_thread);
     connect(&m_thread, &QThread::finished, m_worker, &QObject::deleteLater);
     connect(this, &MainWindow::requestOpen, m_worker, &RenderWorker::openDocument);
-    connect(this, &MainWindow::requestRender, m_worker, &RenderWorker::renderPage);
+    connect(this, &MainWindow::requestTiles, m_worker, &RenderWorker::renderTiles);
     connect(m_worker, &RenderWorker::documentOpened, this, &MainWindow::onOpened);
-    connect(m_worker, &RenderWorker::pageRendered, this, &MainWindow::onRendered);
+    connect(m_worker, &RenderWorker::tileRendered, this, &MainWindow::onTileRendered);
     connect(this, &MainWindow::requestThumbnail, m_worker, &RenderWorker::renderThumbnail);
     connect(this, &MainWindow::requestSearch, m_worker, &RenderWorker::search);
     connect(this, &MainWindow::requestInspect, m_worker, &RenderWorker::inspect);
@@ -198,23 +208,29 @@ MainWindow::MainWindow(bool safeMode) : m_safeMode(safeMode)
     m_compositor = new CompositeWorker;
     m_compositor->moveToThread(&m_compositeThread);
     connect(&m_compositeThread, &QThread::finished, m_compositor, &QObject::deleteLater);
-    connect(this, &MainWindow::requestComposite, m_compositor, &CompositeWorker::compose);
-    connect(m_compositor, &CompositeWorker::composed, this, &MainWindow::onComposed);
+    connect(this, &MainWindow::requestTileComposite, m_compositor, &CompositeWorker::composeTile);
+    connect(m_compositor, &CompositeWorker::tileComposed, this, &MainWindow::onTileComposed);
     m_compositeThread.start();
 
     m_systemMonitorProfile = engine::ProfileLibrary::systemMonitorProfile();
 
     connect(m_view, &PageView::zoomRequested, this, &MainWindow::zoomBy);
     connect(m_view, &PageView::fileDropped, this, &MainWindow::openFile);
-    connect(m_view, &PageView::hovered, this, [this](int x, int y) {
-        if (m_shown.image) // the page on screen, which can be one step behind the newest render
-            m_panel->setInkValues(engine::inkValues(*m_shown.image, x, y, m_panel->sampleSize()));
+    connect(m_view, &PageView::viewChanged, m_scheduleTimer, qOverload<>(&QTimer::start));
+    connect(m_view, &PageView::currentPageChanged, this, &MainWindow::onCurrentPageChanged);
+    connect(m_view, &PageView::hovered, this, [this](int page, QPointF point) {
+        m_hoverPage = page;
+        m_hoverPoint = point;
+        showInkValues();
     });
-    connect(m_view, &PageView::clicked, this, [this](QPointF point) {
+    connect(m_view, &PageView::clicked, this, [this](int page, QPointF point) {
         if (m_info.pageCount > 0)
-            emit requestInspect(m_page, point, m_rotation);
+            emit requestInspect(page, point, m_rotation);
     });
-    connect(m_view, &PageView::hoverLeft, this, [this] { m_panel->setInkValues({}); });
+    connect(m_view, &PageView::hoverLeft, this, [this] {
+        m_hoverPage = -1;
+        m_panel->setInkValues({});
+    });
     connect(m_panel, &OutputPreviewPanel::displayChanged, this, &MainWindow::recomposite);
     m_panel->setBoxActions({ m_boxTrim, m_boxBleed, m_boxCrop, m_boxArt, m_boxMedia });
     applyBoxVisibility();
@@ -263,8 +279,7 @@ void MainWindow::buildActions()
             &QAction::triggered, this, [this] {
                 m_fit = false;
                 m_fitAction->setChecked(false);
-                m_zoom = logicalDpiX() / 72.0;
-                render();
+                setZoom(logicalDpiX() / 72.0);
             });
     m_fitAction = addItem(QStringLiteral("view.fitPage"), tr("&Fit page"), tr("Fit the whole page in the window"),
                           QKeySequence(tr("Ctrl+0")));
@@ -338,7 +353,7 @@ void MainWindow::buildActions()
         m_currentHit = -1;
         m_searchText.clear();
         m_searchStatus->clear();
-        m_view->setSearchHits({}, {});
+        m_view->setSearchHits({}, -1, {});
     });
 
     for (const auto &panel : { std::make_tuple(QStringLiteral("window.thumbnails"), m_thumbnailDock,
@@ -567,26 +582,24 @@ void MainWindow::chooseFile()
 
 void MainWindow::openFile(const QString &path)
 {
+    m_worker->setLatestBatch(++m_batchId); // stop drawing tiles of the current file first
     emit requestOpen(QFileInfo(path).absoluteFilePath());
 }
 
-void MainWindow::onOpened(const engine::DocumentInfo &info, const QList<QSizeF> &sizes)
+void MainWindow::onOpened(const engine::DocumentInfo &info, const QList<engine::PageInfo> &pages)
 {
     m_info = info;
-    m_sizes = sizes;
+    m_pages = pages;
+    m_sizes.clear();
+    for (const engine::PageInfo &page : pages)
+        m_sizes.append(page.size);
     m_page = 0;
     m_rotation = 0;
-    m_render = {};
-    m_pending = {};
-    m_shown = {};
-    ++m_compositeId; // anything still being prepared belongs to the previous document
     m_hits.clear();
     m_currentHit = -1;
     m_searchText.clear();
     m_searchStatus->clear();
-    m_view->setSearchHits({}, {});
-    m_view->setSelection({});
-    m_pendingFramePage = -1;
+    m_hoverPage = -1;
     m_worker->setLatestPreflight(++m_preflightId); // stops a check of the previous document
     m_preflight->setRunning(false);
     m_preflight->setDocument(info.path, info.pdfxVersion);
@@ -600,6 +613,15 @@ void MainWindow::onOpened(const engine::DocumentInfo &info, const QList<QSizeF> 
     settings.setValue(QStringLiteral("recentFiles"), recent.mid(0, 10));
     updateRecentMenu();
 
+    // The separations list covers the whole document, not just one page.
+    m_allInks = QStringList{ QStringLiteral("Cyan"), QStringLiteral("Magenta"), QStringLiteral("Yellow"),
+                             QStringLiteral("Black") };
+    for (const engine::PageInfo &page : pages)
+        for (const QString &spot : page.spots)
+            if (!m_allInks.contains(spot))
+                m_allInks << spot;
+    m_panel->setInks(m_allInks);
+
     {
         QSignalBlocker block(m_pageSpin);
         m_pageSpin->setRange(1, qMax(1, info.pageCount));
@@ -608,8 +630,13 @@ void MainWindow::onOpened(const engine::DocumentInfo &info, const QList<QSizeF> 
     m_pageCount->setText(tr(" of %1 ").arg(info.pageCount));
     refreshProfiles();
     updateBanner();
+    layoutPages();
+    m_fit = true;
+    m_fitAction->setChecked(true);
+    setZoom(fitZoom());
+    m_view->scrollToPage(0);
+    onCurrentPageChanged(m_view->currentPage());
     restartThumbnails();
-    render();
 }
 
 QSizeF MainWindow::viewSize(int page) const
@@ -618,14 +645,36 @@ QSizeF MainWindow::viewSize(int page) const
     return m_rotation % 180 == 0 ? size : size.transposed();
 }
 
+engine::PageBoxes MainWindow::rotatedBoxes(int page) const
+{
+    engine::PageBoxes b = m_pages.value(page).boxes;
+    for (QRectF *r : { &b.media, &b.crop, &b.bleed, &b.trim, &b.art })
+        if (!r->isNull())
+            *r = toCurrentRotation(*r, page);
+    return b;
+}
+
+void MainWindow::layoutPages()
+{
+    QList<QSizeF> sizes;
+    QList<engine::PageBoxes> boxes;
+    for (int i = 0; i < m_pages.size(); ++i) {
+        sizes.append(viewSize(i));
+        boxes.append(rotatedBoxes(i));
+    }
+    m_view->setPages(sizes, boxes);
+}
+
 void MainWindow::rotateBy(int degrees)
 {
     if (m_info.pageCount == 0)
         return;
+    const int page = m_page;
     m_rotation = ((m_rotation + degrees) % 360 + 360) % 360;
-    m_view->setSelection({});
+    layoutPages();
+    setZoom(m_fit ? fitZoom() : m_view->zoom());
+    m_view->scrollToPage(page);
     restartThumbnails();
-    render();
     if (!m_searchText.isEmpty())
         startSearch(); // result positions depend on the rotation
 }
@@ -655,6 +704,7 @@ void MainWindow::requestNextThumbnail(int page)
         return;
     engine::CompositeOptions o = compositeOptions();
     o.visible.clear();
+    o.hiddenInks.clear();
     o.showCoverage = false;
     emit requestThumbnail(page, kThumbnailSize, m_rotation, o, m_thumbGeneration);
 }
@@ -692,7 +742,7 @@ void MainWindow::startSearch()
     m_searchText = m_searchField->text();
     m_hits.clear();
     m_currentHit = -1;
-    m_view->setSearchHits({}, {});
+    m_view->setSearchHits({}, -1, {});
     if (m_searchText.isEmpty() || m_info.pageCount == 0) {
         m_searchStatus->clear();
         return;
@@ -710,7 +760,7 @@ void MainWindow::onSearchFinished(const QString &text, const QList<engine::Searc
     m_currentHit = -1;
     if (hits.isEmpty()) {
         m_searchStatus->setText(tr(" \"%1\" was not found").arg(text));
-        m_view->setSearchHits({}, {});
+        m_view->setSearchHits({}, -1, {});
         return;
     }
     // Start with the first result on or after the page being viewed.
@@ -742,24 +792,19 @@ void MainWindow::showCurrentHit()
     if (m_currentHit < 0 || m_currentHit >= m_hits.size())
         return;
     m_searchStatus->setText(tr(" %1 of %2").arg(m_currentHit + 1).arg(m_hits.size()));
-    const int page = m_hits.at(m_currentHit).page;
-    if (page != m_page) {
-        goToPage(page); // the highlights are drawn when the page arrives
-        return;
-    }
-    QList<QRectF> onPage;
+    const engine::SearchHit &current = m_hits.at(m_currentHit);
+    QHash<int, QList<QRectF>> all;
     for (const engine::SearchHit &hit : m_hits)
-        if (hit.page == m_page)
-            onPage += hit.rects;
-    m_view->setSearchHits(onPage, m_hits.at(m_currentHit).rects);
+        all[hit.page] += hit.rects;
+    m_view->setSearchHits(all, current.page, current.rects);
+    if (!current.rects.isEmpty())
+        m_view->ensureVisible(current.page, current.rects.first());
 }
 
 void MainWindow::onObjectsFound(int page, const QList<engine::ObjectInfo> &objects)
 {
-    if (page != m_page)
-        return;
     m_inspector->clear();
-    m_view->setSelection(objects.isEmpty() ? QRectF() : objects.first().bounds);
+    m_view->setSelection(page, objects.isEmpty() ? QRectF() : objects.first().bounds);
     if (objects.isEmpty()) {
         new QTreeWidgetItem(m_inspector, { tr("Nothing here"), tr("only paper") });
         return;
@@ -817,50 +862,75 @@ QRectF MainWindow::toCurrentRotation(const QRectF &r, int page) const
 
 void MainWindow::showFinding(const preflight::Finding &finding)
 {
-    if (finding.page < 0) {
-        m_view->setSelection({});
+    if (finding.page < 0 || finding.page >= m_info.pageCount) {
+        m_view->setSelection(-1, {});
         return; // concerns the whole document; nothing to point at
     }
-    if (finding.page != m_page) {
-        m_pendingFramePage = finding.page;
-        m_pendingFrame = finding.bounds;
-        goToPage(finding.page); // the frame is drawn when the page arrives
-        return;
-    }
-    m_view->setSelection(finding.bounds.isValid() ? toCurrentRotation(finding.bounds, m_page) : QRectF());
+    const QRectF bounds = finding.bounds.isValid() ? toCurrentRotation(finding.bounds, finding.page) : QRectF();
+    m_view->setSelection(finding.page, bounds);
+    m_view->scrollToPage(finding.page);
+    if (bounds.isValid())
+        m_view->ensureVisible(finding.page, bounds);
 }
 
 void MainWindow::goToPage(int page)
 {
     if (m_info.pageCount == 0)
         return;
-    page = qBound(0, page, m_info.pageCount - 1);
-    if (page == m_page)
-        return;
-    m_page = page;
-    QSignalBlocker block(m_pageSpin);
-    m_pageSpin->setValue(page + 1);
-    QSignalBlocker blockList(m_thumbnails);
-    m_thumbnails->setCurrentRow(page);
-    m_view->setSelection({});
-    m_view->setSearchHits({}, {});
-    render();
+    m_view->scrollToPage(qBound(0, page, m_info.pageCount - 1));
 }
 
-void MainWindow::zoomBy(int steps)
+void MainWindow::onCurrentPageChanged(int page)
 {
+    if (page < 0 || page >= m_info.pageCount)
+        return;
+    m_page = page;
+    {
+        QSignalBlocker block(m_pageSpin);
+        m_pageSpin->setValue(page + 1);
+    }
+    {
+        QSignalBlocker block(m_thumbnails);
+        m_thumbnails->setCurrentRow(page);
+    }
+    const engine::PageBoxes &b = m_pages.value(page).boxes;
+    const QRectF finished = b.hasTrim ? b.trim : (b.hasCrop ? b.crop : b.media);
+    m_sizeLabel->setText(tr("%1: %2 × %3 mm")
+                             .arg(b.hasTrim ? tr("Trim size") : tr("Page size"))
+                             .arg(finished.width() * kMmPerPoint, 0, 'f', 1)
+                             .arg(finished.height() * kMmPerPoint, 0, 'f', 1));
+}
+
+void MainWindow::zoomBy(int steps, QPoint anchor)
+{
+    if (m_info.pageCount == 0)
+        return;
     m_fit = false;
     m_fitAction->setChecked(false);
-    m_zoom *= steps > 0 ? 1.25 : 0.8;
-    render();
+    setZoom(m_view->zoom() * (steps > 0 ? 1.25 : 0.8), anchor);
+}
+
+void MainWindow::setZoom(double zoom, QPoint anchor)
+{
+    // The column of pages must stay within what a scroll bar can address.
+    double total = 0;
+    for (int i = 0; i < m_sizes.size(); ++i)
+        total += viewSize(i).height() + 2 * PageView::margin;
+    const double limit = total > 0 ? qMin(kMaxZoom, 2.0e9 / total) : kMaxZoom;
+    zoom = qBound(kMinZoom, zoom, limit);
+    m_view->setZoom(zoom, anchor);
+    m_zoomLabel->setText(tr("%1 %").arg(qRound(zoom * 72.0 / logicalDpiX() * 100)));
 }
 
 void MainWindow::setFit(bool fit)
 {
     m_fit = fit;
     m_fitAction->setChecked(fit);
-    if (fit)
-        render();
+    if (fit && m_info.pageCount > 0) {
+        const int page = m_page;
+        setZoom(fitZoom());
+        m_view->scrollToPage(page);
+    }
 }
 
 double MainWindow::fitZoom() const
@@ -868,57 +938,132 @@ double MainWindow::fitZoom() const
     const QSizeF page = viewSize(m_page);
     if (page.isEmpty())
         return 1.0;
-    const QSize room = m_view->maximumViewportSize() - QSize(28, 28);
+    QSize room = m_view->maximumViewportSize() - QSize(2 * PageView::margin + 4, 2 * PageView::margin + 4);
+    // With more than one page the vertical scroll bar is always needed.
+    if (m_info.pageCount > 1)
+        room.rwidth() -= m_view->style()->pixelMetric(QStyle::PM_ScrollBarExtent, nullptr, m_view);
     return qMin(room.width() / page.width(), room.height() / page.height());
 }
 
-void MainWindow::render()
+void MainWindow::scheduleTiles()
 {
     if (m_info.pageCount == 0)
         return;
-    if (m_fit)
-        m_zoom = fitZoom();
-    const QSizeF page = viewSize(m_page);
-    double limit = kMaxZoom;
-    if (!page.isEmpty())
-        limit = qMin(limit, std::sqrt(kMaxPixels / (page.width() * page.height())));
-    m_zoom = qBound(kMinZoom, m_zoom, limit);
-    m_zoomLabel->setText(tr("%1 %").arg(qRound(m_zoom * 72.0 / logicalDpiX() * 100)));
-    m_worker->setLatestRequest(++m_requestId);
-    emit requestRender(m_page, m_zoom, m_rotation, m_requestId);
+    const int generation = m_view->generation();
+    if (generation != m_storeGeneration) {
+        m_store.clear(); // rendered for another zoom or rotation
+        m_storeGeneration = generation;
+    }
+    // Everything on screen and just around it. Tiles already rendered only
+    // need a picture if the view dropped theirs; the rest are rendered, in
+    // one batch that replaces any batch still running.
+    QList<TileKey> render;
+    for (const TileKey &key : m_view->wantedTiles(true)) {
+        if (m_store.contains(key)) {
+            if (!m_view->hasTile(key))
+                composeTile(key);
+        } else {
+            render.append(key);
+        }
+    }
+    if (render.isEmpty())
+        return;
+    m_worker->setLatestBatch(++m_batchId);
+    emit requestTiles(render, m_view->zoom(), m_rotation, generation, m_batchId);
 }
 
-void MainWindow::onRendered(const engine::PageRender &render, int requestId)
+void MainWindow::onTileRendered(const TileKey &key, const engine::PageRender &render, int generation)
 {
-    if (requestId != m_requestId)
-        return; // a newer request is on its way
+    if (generation != m_view->generation() || generation != m_storeGeneration)
+        return; // the zoom or rotation changed meanwhile
     if (!render.image) {
-        m_view->clear();
-        statusBar()->showMessage(tr("Page %1 could not be rendered: %2").arg(render.page + 1).arg(render.error));
+        statusBar()->showMessage(tr("Page %1 could not be drawn: %2").arg(key.page + 1).arg(render.error), 10000);
         return;
     }
-    m_render = render;
-    m_panel->setInks(render.image->inks);
+    m_store.insert(key, { render.image, render.area });
+    evictStore();
+    composeTile(key);
+    if (key.page == m_hoverPage)
+        showInkValues(); // the cursor may be over the tile that just arrived
+}
 
-    const engine::PageBoxes &b = render.boxes;
-    const QRectF finished = b.hasTrim ? b.trim : (b.hasCrop ? b.crop : b.media);
-    m_sizeLabel->setText(tr("%1: %2 × %3 mm")
-                             .arg(b.hasTrim ? tr("Trim size") : tr("Page size"))
-                             .arg(finished.width() * kMmPerPoint, 0, 'f', 1)
-                             .arg(finished.height() * kMmPerPoint, 0, 'f', 1));
-    recomposite();
-    if (m_currentHit >= 0 && m_currentHit < m_hits.size() && m_hits.at(m_currentHit).page == m_page)
-        showCurrentHit();
-    if (m_pendingFramePage == m_page) {
-        m_view->setSelection(m_pendingFrame.isValid() ? toCurrentRotation(m_pendingFrame, m_page) : QRectF());
-        m_pendingFramePage = -1;
+void MainWindow::composeTile(const TileKey &key)
+{
+    const auto it = m_store.constFind(key);
+    if (it != m_store.constEnd())
+        emit requestTileComposite(key, m_storeGeneration, m_optionsId, it->image, it->area, m_options);
+}
+
+void MainWindow::onTileComposed(const TileKey &key, int generation, int optionsId, const QImage &image,
+                                const QRect &area, bool calibrated)
+{
+    if (optionsId != m_optionsId)
+        return; // made with display settings that have changed since
+    m_panel->setCalibrated(calibrated);
+    m_view->setTile(key, generation, image, area);
+    maybeTakeScreenshot();
+}
+
+void MainWindow::evictStore()
+{
+    if (m_store.size() <= kMaxStoredTiles)
+        return;
+    const QList<TileKey> keep = m_view->wantedTiles(true);
+    const QSet<TileKey> wanted(keep.begin(), keep.end());
+    for (auto it = m_store.begin(); it != m_store.end() && m_store.size() > kMaxStoredTiles * 3 / 4;) {
+        if (wanted.contains(it.key()))
+            ++it;
+        else
+            it = m_store.erase(it);
     }
+}
+
+void MainWindow::showInkValues()
+{
+    if (m_hoverPage < 0)
+        return;
+    // The pixel under the cursor, and the tile that holds it.
+    const QPoint px(int(std::floor(m_hoverPoint.x() * m_view->zoom())),
+                    int(std::floor(m_hoverPoint.y() * m_view->zoom())));
+    const TileKey key{ m_hoverPage, px.x() / TileKey::size, px.y() / TileKey::size };
+    const auto it = m_store.constFind(key);
+    if (it == m_store.constEnd() || !it->area.contains(px)) {
+        m_panel->setInkValues({});
+        return;
+    }
+    const engine::SeparatedImage &image = *it->image;
+    const std::vector<double> values =
+        engine::inkValues(image, px.x() - it->area.left(), px.y() - it->area.top(), m_panel->sampleSize());
+    // In the order of the document-wide separations list; inks not on this page read 0.
+    std::vector<double> ordered(size_t(m_allInks.size()), 0.0);
+    for (int i = 0; i < image.inks.size() && size_t(i) < values.size(); ++i) {
+        const int at = int(m_allInks.indexOf(image.inks.at(i)));
+        if (at >= 0)
+            ordered[size_t(at)] = values[size_t(i)];
+    }
+    m_panel->setInkValues(ordered);
+}
+
+void MainWindow::maybeTakeScreenshot()
+{
+    if (m_screenshot.isEmpty() || !m_view->isComplete())
+        return;
+    const QString file = m_screenshot;
+    m_screenshot.clear();
+    QTimer::singleShot(200, this, [this, file] {
+        grab().save(file);
+        // The Output Preview window is saved next to it as <name>-preview.png.
+        QString preview = file;
+        preview.insert(preview.lastIndexOf(QLatin1Char('.')), QStringLiteral("-preview"));
+        m_previewWindow->grab().save(preview);
+        qApp->quit();
+    });
 }
 
 engine::CompositeOptions MainWindow::compositeOptions() const
 {
     engine::CompositeOptions o;
-    o.visible = m_panel->visibleInks();
+    o.hiddenInks = m_panel->hiddenInks();
     const QString choice = m_panel->simulationChoice();
     if (choice == QLatin1String("intent"))
         o.simulationProfile = m_info.outputIntentProfile;
@@ -947,34 +1092,20 @@ engine::CompositeOptions MainWindow::compositeOptions() const
 
 void MainWindow::recomposite()
 {
-    if (!m_render.image)
-        return;
-    // The conversion runs on its own thread; onComposed puts the result on screen.
-    m_pending = m_render;
-    m_compositor->setLatestRequest(++m_compositeId);
-    emit requestComposite(m_render.image, compositeOptions(), m_compositeId);
-}
-
-void MainWindow::onComposed(const QImage &image, bool calibrated, int requestId)
-{
-    if (requestId != m_compositeId)
-        return; // replaced by a newer request, or the document was closed
-    m_shown = m_pending;
-    m_panel->setCalibrated(calibrated);
-    m_view->setPage(image, m_shown.boxes, m_shown.zoom);
-
-    if (!m_screenshot.isEmpty()) {
-        const QString file = m_screenshot;
-        m_screenshot.clear();
-        QTimer::singleShot(200, this, [this, file] {
-            grab().save(file);
-            // The Output Preview window is saved next to it as <name>-preview.png.
-            QString preview = file;
-            preview.insert(preview.lastIndexOf(QLatin1Char('.')), QStringLiteral("-preview"));
-            m_previewWindow->grab().save(preview);
-            qApp->quit();
-        });
+    // New display settings: every stored tile gets a new picture, the ones on
+    // screen first. The old pictures stay up until the new ones arrive.
+    m_options = compositeOptions();
+    m_compositor->setLatestOptions(++m_optionsId);
+    QSet<TileKey> done;
+    for (const TileKey &key : m_view->wantedTiles(true)) {
+        if (m_store.contains(key)) {
+            composeTile(key);
+            done.insert(key);
+        }
     }
+    for (auto it = m_store.constBegin(); it != m_store.constEnd(); ++it)
+        if (!done.contains(it.key()))
+            composeTile(it.key());
 }
 
 void MainWindow::refreshProfiles()

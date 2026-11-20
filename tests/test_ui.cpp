@@ -27,7 +27,8 @@ class TestUi : public QObject {
 
     MainWindow *window = nullptr;
     QTreeWidget *inks = nullptr;
-    QWidget *canvas = nullptr;
+    PageView *view = nullptr;
+    QWidget *canvas = nullptr; // the view's viewport: where pages are painted and mouse events go
     QTemporaryDir configDir;
 
     QStringList toolbarTexts() const
@@ -51,13 +52,33 @@ class TestUi : public QObject {
         f.write(content);
     }
 
-    double zoom() const { return (canvas->width() - 24) / 300.0; }
-    // Widget position of a point given in PDF points (origin bottom-left).
-    QPoint pos(double x, double y) const
+    double zoom() const { return view->zoom(); }
+    // Viewport position of a point in view points (origin top-left), on the
+    // given page or the page in the middle of the window.
+    QPoint viewPos(double x, double y, int page = -1) const
     {
-        return QPoint(12 + int(x * zoom()), 12 + int((300 - y) * zoom()));
+        return view->widgetPos(page < 0 ? view->currentPage() : page, QPointF(x, y));
     }
-    QColor shown(double x, double y) const { return canvas->grab().toImage().pixelColor(pos(x, y)); }
+    // The same for PDF points (origin bottom-left) on the 300 pt test pages.
+    QPoint pos(double x, double y, int page = -1) const { return viewPos(x, 300 - y, page); }
+    QColor shown(double x, double y, int page = -1) const
+    {
+        return canvas->grab().toImage().pixelColor(pos(x, y, page));
+    }
+    // Opens a test file and waits until everything on screen is drawn.
+    void openAndWait(const char *name)
+    {
+        window->openFile(QStringLiteral(TEST_DATA_DIR "/") + QLatin1String(name));
+        QTRY_VERIFY(window->windowTitle().startsWith(QLatin1String(name)));
+        QTRY_VERIFY(view->isComplete());
+    }
+    QAction *action(const char *text) const
+    {
+        for (QAction *a : window->actions())
+            if (a->text().remove('&') == QLatin1String(text))
+                return a;
+        return nullptr;
+    }
     QStringList readout() const
     {
         QStringList values;
@@ -81,8 +102,9 @@ private slots:
         QVERIFY(inks);
         window->openFile(QStringLiteral(TEST_DATA_DIR "/ink_patches.pdf"));
         QTRY_COMPARE(inks->topLevelItemCount(), 5);
-        canvas = window->findChild<PageView *>()->widget();
-        QTRY_VERIFY(canvas->width() > 200);
+        view = window->findChild<PageView *>();
+        canvas = view->viewport();
+        QTRY_VERIFY(view->isComplete());
     }
 
     void inkReadoutFollowsCursor()
@@ -172,7 +194,7 @@ private slots:
         QVERIFY(right && left);
         right->trigger();
         // After a quarter turn clockwise patch A is top-right: view point (250, 50).
-        QTRY_VERIFY(reads(QPoint(12 + int(250 * zoom()), 12 + int(50 * zoom())), patchA));
+        QTRY_VERIFY(reads(viewPos(250, 50), patchA));
         QVERIFY(!reads(pos(50, 250), patchA)); // and no longer top-left
         left->trigger();
         QTRY_VERIFY(reads(pos(50, 250), patchA));
@@ -180,12 +202,10 @@ private slots:
 
     void inspectorAndSearch()
     {
-        window->openFile(QStringLiteral(TEST_DATA_DIR "/objects.pdf"));
+        openAndWait("objects.pdf");
         auto *tree = window->findChild<QTreeWidget *>(QStringLiteral("inspector"));
         QVERIFY(tree);
         QTRY_COMPARE(inks->topLevelItemCount(), 5);
-        QTRY_VERIFY(window->windowTitle().startsWith("objects.pdf"));
-        QTest::qWait(300); // let the new page arrive
 
         auto rows = [tree](int top) {
             QMap<QString, QString> map;
@@ -231,9 +251,7 @@ private slots:
         QTest::keyClick(field, Qt::Key_Return);
         QTRY_VERIFY(status->text().contains("was not found"));
 
-        window->openFile(QStringLiteral(TEST_DATA_DIR "/ink_patches.pdf"));
-        QTRY_VERIFY(window->windowTitle().startsWith("ink_patches.pdf"));
-        QTest::qWait(300);
+        openAndWait("ink_patches.pdf");
     }
 
     void preflight()
@@ -245,8 +263,7 @@ private slots:
         auto *standard = window->findChild<QComboBox *>(QStringLiteral("preflightStandard"));
         QVERIFY(panel && result && tree && button && standard);
 
-        window->openFile(QStringLiteral(TEST_DATA_DIR "/x1a_two_pages.pdf"));
-        QTRY_VERIFY(window->windowTitle().startsWith("x1a_two_pages.pdf"));
+        openAndWait("x1a_two_pages.pdf");
         // The standard the file claims is preselected, and nothing is verified yet.
         QTRY_COMPARE(standard->currentText(), QStringLiteral("PDF/X-1a:2001"));
         QVERIFY(window->statusBar()->findChild<QLabel *>()->text().contains("not verified")
@@ -296,7 +313,7 @@ private slots:
         QTest::qWait(400);
         tree->setCurrentItem(finding);
         auto framedView = [this](double vx, double vy) {
-            const QColor c = canvas->grab().toImage().pixelColor(QPoint(12 + int(vx * zoom()), 12 + int(vy * zoom())));
+            const QColor c = canvas->grab().toImage().pixelColor(viewPos(vx, vy, 1));
             return c.red() > 200 && c.green() < 80 && c.blue() > 150;
         };
         QTRY_VERIFY(framedView(125, 100)); // top edge of the turned square
@@ -318,8 +335,7 @@ private slots:
         QVERIFY(pdf.read(5) == "%PDF-");
 
         // A clean file passes, and opening it clears the old result first.
-        window->openFile(QStringLiteral(TEST_DATA_DIR "/x1a_ok.pdf"));
-        QTRY_VERIFY(window->windowTitle().startsWith("x1a_ok.pdf"));
+        openAndWait("x1a_ok.pdf");
         QTRY_VERIFY(!panel->hasReport());
         QCOMPARE(tree->topLevelItemCount(), 0);
         button->click();
@@ -332,23 +348,49 @@ private slots:
         QTRY_VERIFY(result->text().contains("Failed"));
         QVERIFY(tree->topLevelItemCount() >= 1);
 
-        window->openFile(QStringLiteral(TEST_DATA_DIR "/ink_patches.pdf"));
-        QTRY_VERIFY(window->windowTitle().startsWith("ink_patches.pdf"));
-        QTest::qWait(300);
+        openAndWait("ink_patches.pdf");
+    }
+
+    void preflightGroupsRepeatedProblems()
+    {
+        auto *panel = window->findChild<PreflightPanel *>();
+        auto *tree = window->findChild<QTreeWidget *>(QStringLiteral("preflightFindings"));
+        auto *button = window->findChild<QPushButton *>(QStringLiteral("preflightCheck"));
+        auto *standard = window->findChild<QComboBox *>(QStringLiteral("preflightStandard"));
+        auto *spin = window->findChild<QSpinBox *>();
+        openAndWait("x4_acrobat_comparison.pdf"); // 3 pages, none with a TrimBox
+        QCOMPARE(standard->currentText(), QStringLiteral("PDF/X-4")); // no claim: X-4 is the default
+        button->click();
+        QTRY_VERIFY(panel->hasReport());
+
+        QTreeWidgetItem *boxes = nullptr;
+        for (int i = 0; i < tree->topLevelItemCount(); ++i)
+            if (tree->topLevelItem(i)->text(0) == QLatin1String("Page boxes"))
+                boxes = tree->topLevelItem(i);
+        QVERIFY(boxes);
+        QCOMPARE(boxes->childCount(), 1); // one row for the problem ...
+        QTreeWidgetItem *problem = boxes->child(0);
+        QVERIFY(problem->text(0).contains("no TrimBox"));
+        QCOMPARE(problem->text(1), QStringLiteral("3 pages"));
+        QCOMPARE(problem->childCount(), 3); // ... with the pages underneath
+        QCOMPARE(problem->child(2)->text(0), QStringLiteral("Page 3"));
+
+        tree->setCurrentItem(problem->child(2));
+        QTRY_COMPARE(spin->value(), 3);
+        if (qEnvironmentVariableIsSet("UI_SCREENSHOT")) {
+            QTRY_VERIFY(view->isComplete());
+            window->findChild<QDockWidget *>(QStringLiteral("preflightPanel"))->raise();
+            QTest::qWait(150);
+            window->grab().save(qEnvironmentVariable("UI_SCREENSHOT") + ".grouped.png");
+        }
+        tree->setCurrentItem(problem->child(0));
+        QTRY_COMPARE(spin->value(), 1);
+        openAndWait("ink_patches.pdf");
     }
 
     void pageBoxesCanBeSwitchedIndividually()
     {
-        window->openFile(QStringLiteral(TEST_DATA_DIR "/x1a_trim_and_art.pdf")); // Trim 10..290, Art 20..280
-        QTRY_VERIFY(window->windowTitle().startsWith("x1a_trim_and_art.pdf"));
-        QTest::qWait(300);
-
-        auto action = [this](const char *name) {
-            for (QAction *a : window->actions())
-                if (a->text().remove('&') == QLatin1String(name))
-                    return a;
-            return static_cast<QAction *>(nullptr);
-        };
+        openAndWait("x1a_trim_and_art.pdf"); // Trim 10..290, Art 20..280
         QAction *trim = action("Trim box"), *crop = action("Crop box"), *art = action("Art box"),
                 *bleed = action("Bleed box"), *media = action("Media box");
         QVERIFY(trim && crop && art && bleed && media);
@@ -357,8 +399,8 @@ private slots:
         // A box line is dashed, so look along the whole left edge of the box for its colour.
         auto lineAt = [this](double x, auto matches) {
             const QImage img = canvas->grab().toImage();
-            const int px = 12 + int(x * zoom());
-            for (int y = 12 + int(60 * zoom()); y < 12 + int(240 * zoom()); ++y)
+            const int px = viewPos(x, 0).x();
+            for (int y = viewPos(0, 60).y(); y < viewPos(0, 240).y(); ++y)
                 for (int dx = -1; dx <= 1; ++dx)
                     if (matches(img.pixelColor(px + dx, y)))
                         return true;
@@ -404,19 +446,12 @@ private slots:
 
     void middleButtonDragsThePage()
     {
-        auto *view = window->findChild<PageView *>();
-        QAction *zoomIn = nullptr, *fit = nullptr;
-        for (QAction *a : window->actions()) {
-            if (a->text().remove('&') == QLatin1String("Zoom in"))
-                zoomIn = a;
-            if (a->text().remove('&') == QLatin1String("Fit page"))
-                fit = a;
-        }
+        QAction *zoomIn = action("Zoom in"), *fit = action("Fit page");
         QVERIFY(zoomIn && fit);
-        const int fitted = canvas->width();
+        const double fitted = zoom();
         for (int i = 0; i < 4; ++i)
             zoomIn->trigger();
-        QTRY_VERIFY(canvas->width() > fitted * 2); // now larger than the window, so it can scroll
+        QTRY_VERIFY(zoom() > fitted * 2); // now larger than the window, so it can scroll
         QScrollBar *h = view->horizontalScrollBar(), *v = view->verticalScrollBar();
         QVERIFY(h->maximum() > 100 && v->maximum() > 100);
         h->setValue(0);
@@ -438,10 +473,70 @@ private slots:
         QCOMPARE(v->value(), 40);
 
         fit->trigger();
-        QTRY_VERIFY(qAbs(canvas->width() - fitted) < 30); // back to the whole page
-        window->openFile(QStringLiteral(TEST_DATA_DIR "/ink_patches.pdf"));
-        QTRY_VERIFY(window->windowTitle().startsWith("ink_patches.pdf"));
-        QTest::qWait(300);
+        QTRY_VERIFY(qAbs(zoom() - fitted) < fitted * 0.05); // back to the whole page
+        openAndWait("ink_patches.pdf");
+    }
+
+    void continuousScrolling()
+    {
+        openAndWait("x1a_two_pages.pdf"); // page 1: black square, page 2: red square
+        auto *spin = window->findChild<QSpinBox *>();
+        auto *thumbs = window->findChild<QListWidget *>(QStringLiteral("thumbnails"));
+        QCOMPARE(view->pageCount(), 2);
+        QCOMPARE(spin->value(), 1);
+        // Page 2 follows page 1 in one column.
+        QVERIFY(view->pageRect(1).top() > view->pageRect(0).bottom());
+
+        // Scrolling down is enough to reach page 2: page number and thumbnail follow.
+        view->verticalScrollBar()->setValue(view->verticalScrollBar()->maximum());
+        QTRY_COMPARE(spin->value(), 2);
+        QCOMPARE(thumbs->currentRow(), 1);
+        QTRY_VERIFY(view->isComplete());
+        QTRY_COMPARE(shown(125, 125, 1), QColor(Qt::red));
+
+        // The ink readout works on whichever page is under the cursor.
+        QTest::mouseMove(canvas, pos(125, 125, 1));
+        QTRY_COMPARE(readout().first(), QStringLiteral("0 %")); // RGB red has no cyan once separated
+        QVERIFY(readout().at(1) != QStringLiteral("–"));
+
+        // Clicking the first thumbnail scrolls back up.
+        thumbs->setCurrentRow(0);
+        QTRY_COMPARE(spin->value(), 1);
+        QTRY_VERIFY(view->isComplete());
+        QTRY_COMPARE(shown(150, 150, 0), QColor(Qt::black));
+
+        // Page Down goes to the next page.
+        action("Next page")->trigger();
+        QTRY_COMPARE(spin->value(), 2);
+        action("Previous page")->trigger();
+        QTRY_COMPARE(spin->value(), 1);
+    }
+
+    void zoomFarIntoALargePage()
+    {
+        // 25x is a 7500 x 7500 pixel page, larger than one picture used to be
+        // allowed; only the tiles on screen are drawn.
+        openAndWait("ink_patches.pdf");
+        for (int i = 0; i < 12 && zoom() < 25; ++i)
+            action("Zoom in")->trigger();
+        QVERIFY2(zoom() > 20, qPrintable(QString::number(zoom())));
+        view->centerOn(0, QPointF(50, 50)); // patch A, PDF (50, 250)
+        QTRY_VERIFY(view->isComplete());
+        QVERIFY2(view->tileCount() < 60, qPrintable(QString::number(view->tileCount())));
+        QTest::mouseMove(canvas, pos(50, 250));
+        QTRY_COMPARE(readout(), QStringList({ "40 %", "30 %", "20 %", "10 %", "0 %" }));
+
+        // Ctrl + wheel zooms around the cursor: the point under it stays put.
+        const QPoint at = pos(50, 250);
+        const double before = zoom();
+        QWheelEvent wheel(at, canvas->mapToGlobal(at), QPoint(), QPoint(0, -120), Qt::NoButton, Qt::ControlModifier,
+                          Qt::NoScrollPhase, false);
+        QCoreApplication::sendEvent(canvas, &wheel);
+        QTRY_VERIFY(zoom() < before);
+        QVERIFY((pos(50, 250) - at).manhattanLength() <= 2);
+
+        action("Fit page")->trigger();
+        QTRY_VERIFY(view->isComplete());
     }
 
     void defaultLayout()

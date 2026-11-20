@@ -2,7 +2,6 @@
 
 #include "preflight/Preflight.h"
 
-#include <QSizeF>
 
 void RenderWorker::openDocument(const QString &path)
 {
@@ -13,17 +12,19 @@ void RenderWorker::openDocument(const QString &path)
         return;
     }
     m_doc = std::move(doc);
-    QList<QSizeF> sizes;
+    QList<engine::PageInfo> pages;
     for (int i = 0; i < m_doc->info().pageCount; ++i)
-        sizes.append(m_doc->pageSize(i));
-    emit documentOpened(m_doc->info(), sizes);
+        pages.append(m_doc->pageInfo(i));
+    emit documentOpened(m_doc->info(), pages);
 }
 
-void RenderWorker::renderPage(int page, double zoom, int rotation, int requestId)
+void RenderWorker::renderTiles(const QList<TileKey> &tiles, double zoom, int rotation, int generation, int batchId)
 {
-    if (!m_doc || requestId < m_latest.load())
-        return;
-    emit pageRendered(m_doc->render(page, zoom, rotation), requestId);
+    for (const TileKey &key : tiles) {
+        if (!m_doc || batchId < m_latestBatch.load())
+            return; // the view has moved on; a newer batch has the tiles it needs
+        emit tileRendered(key, m_doc->renderTile(key.page, zoom, rotation, key.area()), generation);
+    }
 }
 
 void RenderWorker::renderThumbnail(int page, int size, int rotation, const engine::CompositeOptions &options,

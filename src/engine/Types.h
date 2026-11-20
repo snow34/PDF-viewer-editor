@@ -4,7 +4,9 @@
 #include <QByteArray>
 #include <QList>
 #include <QMetaType>
+#include <QRect>
 #include <QRectF>
+#include <QSizeF>
 #include <QString>
 #include <QStringList>
 
@@ -44,9 +46,19 @@ struct PageRender {
     int page = -1;
     double zoom = 1.0;
     int rotation = 0; // 0, 90, 180 or 270 degrees clockwise
+    // The part of the page in this image, in pixels at `zoom` (0, 0 is the
+    // page's top-left corner). The whole page unless a tile was asked for.
+    QRect area;
     std::shared_ptr<SeparatedImage> image;
     PageBoxes boxes;
     QString error;
+};
+
+// What the viewer needs to know about a page before drawing any of it.
+struct PageInfo {
+    QSizeF size;      // points, rotation 0
+    PageBoxes boxes;  // rotation 0
+    QStringList spots; // names of the spot colours used on the page
 };
 
 // One place where the search text was found. Rectangles are in points, in
@@ -98,5 +110,6 @@ struct DocumentInfo {
 
 Q_DECLARE_METATYPE(engine::PageRender)
 Q_DECLARE_METATYPE(engine::DocumentInfo)
+Q_DECLARE_METATYPE(engine::PageInfo)
 Q_DECLARE_METATYPE(engine::SearchHit)
 Q_DECLARE_METATYPE(engine::ObjectInfo)

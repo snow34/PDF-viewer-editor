@@ -74,7 +74,7 @@ PreflightPanel::PreflightPanel(QWidget *parent) : QWidget(parent)
     });
     connect(m_save, &QPushButton::clicked, this, &PreflightPanel::chooseFileAndSave);
     connect(m_tree, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem *item) {
-        const int index = item && item->parent() ? item->data(0, Qt::UserRole).toInt() : -1;
+        const int index = item ? item->data(0, Qt::UserRole).toInt() : -1;
         if (index < 0 || index >= m_report.findings.size()) {
             m_detail->hide();
             return;
@@ -163,25 +163,48 @@ void PreflightPanel::setReport(const preflight::Report &report)
 
     const QIcon errorIcon = style()->standardIcon(QStyle::SP_MessageBoxCritical);
     const QIcon warningIcon = style()->standardIcon(QStyle::SP_MessageBoxWarning);
-    QHash<QString, QTreeWidgetItem *> groups;
+    // Category > problem > pages. The same problem on several pages is one
+    // row with the pages underneath it, as in Acrobat's preflight results.
+    QHash<QString, QTreeWidgetItem *> categories;
+    QHash<QString, QTreeWidgetItem *> problems; // rule id + message -> row
     for (int i = 0; i < report.findings.size(); ++i) {
         const Finding &f = report.findings.at(i);
-        QTreeWidgetItem *group = groups.value(f.category);
-        if (!group) {
-            group = new QTreeWidgetItem(m_tree, { f.category });
-            group->setFirstColumnSpanned(true);
-            QFont bold = group->font(0);
+        QTreeWidgetItem *category = categories.value(f.category);
+        if (!category) {
+            category = new QTreeWidgetItem(m_tree, { f.category });
+            category->setFirstColumnSpanned(true);
+            category->setData(0, Qt::UserRole, -1);
+            QFont bold = category->font(0);
             bold.setBold(true);
-            group->setFont(0, bold);
-            groups.insert(f.category, group);
+            category->setFont(0, bold);
+            categories.insert(f.category, category);
         }
-        auto *item = new QTreeWidgetItem(group, { f.message, f.page < 0 ? QString() : QString::number(f.page + 1) });
-        item->setIcon(0, f.severity == Severity::Error ? errorIcon : warningIcon);
-        item->setToolTip(0, tr("%1\nRule: %2").arg(f.message, f.ruleId));
-        item->setData(0, Qt::UserRole, i);
-        item->setTextAlignment(1, Qt::AlignRight | Qt::AlignTop);
+        const QString page = f.page < 0 ? QString() : QString::number(f.page + 1);
+        const QString problemKey = f.ruleId + QLatin1Char('\n') + f.message;
+        QTreeWidgetItem *problem = problems.value(problemKey);
+        if (!problem) {
+            problem = new QTreeWidgetItem(category, { f.message, page });
+            problem->setIcon(0, f.severity == Severity::Error ? errorIcon : warningIcon);
+            problem->setToolTip(0, tr("%1\nRule: %2").arg(f.message, f.ruleId));
+            problem->setData(0, Qt::UserRole, i);
+            problem->setTextAlignment(1, Qt::AlignRight | Qt::AlignTop);
+            problems.insert(problemKey, problem);
+            continue;
+        }
+        // A second page with the same problem: turn the row into a group.
+        if (problem->childCount() == 0) {
+            const int first = problem->data(0, Qt::UserRole).toInt();
+            auto *firstPage = new QTreeWidgetItem(problem, { tr("Page %1").arg(problem->text(1)) });
+            firstPage->setData(0, Qt::UserRole, first);
+        }
+        auto *pageItem = new QTreeWidgetItem(problem, { tr("Page %1").arg(page) });
+        pageItem->setData(0, Qt::UserRole, i);
+        problem->setText(1, tr("%1 pages").arg(problem->childCount()));
     }
     m_tree->expandAll();
+    for (QTreeWidgetItem *problem : std::as_const(problems))
+        if (problem->childCount() > 20)
+            problem->setExpanded(false); // long page lists start folded
 }
 
 bool PreflightPanel::saveReport(const QString &path, QString *error)

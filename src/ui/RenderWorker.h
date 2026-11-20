@@ -3,6 +3,7 @@
 
 #include "engine/Compositor.h"
 #include "engine/Document.h"
+#include "TileKey.h"
 #include "preflight/Types.h"
 
 #include <QObject>
@@ -13,14 +14,15 @@
 class RenderWorker : public QObject {
     Q_OBJECT
 public:
-    // Called from the UI thread: renders older than this id are skipped.
-    void setLatestRequest(int id) { m_latest.store(id); }
+    // Called from the UI thread: a tile batch older than this id stops.
+    void setLatestBatch(int id) { m_latestBatch.store(id); }
     void setLatestSearch(int id) { m_latestSearch.store(id); }
     void setLatestPreflight(int id) { m_latestPreflight.store(id); }
 
 public slots:
     void openDocument(const QString &path);
-    void renderPage(int page, double zoom, int rotation, int requestId);
+    // Renders tiles in the given order until a newer batch is announced.
+    void renderTiles(const QList<TileKey> &tiles, double zoom, int rotation, int generation, int batchId);
     // Small render for the thumbnails panel, fitted into a square of `size` pixels.
     void renderThumbnail(int page, int size, int rotation, const engine::CompositeOptions &options,
                          int generation);
@@ -32,9 +34,9 @@ public slots:
     void runPreflight(int standard, int checkId);
 
 signals:
-    void documentOpened(const engine::DocumentInfo &info, const QList<QSizeF> &pageSizes);
+    void documentOpened(const engine::DocumentInfo &info, const QList<engine::PageInfo> &pages);
     void openFailed(const QString &path, const QString &error);
-    void pageRendered(const engine::PageRender &render, int requestId);
+    void tileRendered(const TileKey &key, const engine::PageRender &render, int generation);
     void thumbnailRendered(int page, const QImage &image, int generation);
     void searchFinished(const QString &text, const QList<engine::SearchHit> &hits, int searchId);
     void objectsFound(int page, const QList<engine::ObjectInfo> &objects);
@@ -43,7 +45,7 @@ signals:
 
 private:
     std::unique_ptr<engine::Document> m_doc;
-    std::atomic<int> m_latest{ 0 };
+    std::atomic<int> m_latestBatch{ 0 };
     std::atomic<int> m_latestSearch{ 0 };
     std::atomic<int> m_latestPreflight{ 0 };
 };

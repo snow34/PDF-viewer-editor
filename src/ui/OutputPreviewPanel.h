@@ -30,6 +30,7 @@ public:
     QString simulationChoice() const;
     engine::DisplayIntent intent() const;
     std::vector<bool> visibleInks() const;
+    QStringList hiddenInks() const;
     int sampleSize() const;
     bool showCoverage() const;
     double coverageLimit() const;

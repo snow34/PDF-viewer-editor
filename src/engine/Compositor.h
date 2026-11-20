@@ -5,6 +5,7 @@
 
 #include <QColor>
 #include <QImage>
+#include <QStringList>
 
 namespace engine {
 
@@ -15,6 +16,7 @@ enum class DisplayIntent {
 
 struct CompositeOptions {
     std::vector<bool> visible;      // per ink; empty = all visible
+    QStringList hiddenInks;         // inks to hide by name (used when `visible` is empty)
     QByteArray simulationProfile;   // CMYK ICC profile describing the press; empty = uncalibrated
     QByteArray monitorProfile;      // RGB ICC profile of the display; empty = sRGB
     DisplayIntent intent = DisplayIntent::RelativeColorimetric;

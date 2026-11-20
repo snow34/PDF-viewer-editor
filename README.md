@@ -17,9 +17,9 @@ It is open source (AGPL-3.0) and built with C++, Qt 6 and MuPDF.
 | You want to… | How |
 |---|---|
 | Open a PDF | **File > Open**, or drag the file onto the window. Recent files are under **File > Open recent**. |
-| Move between pages | **Previous page** / **Next page** in the toolbar, Page Up / Page Down, or type a page number. |
+| Move between pages | All pages are one long column: just scroll. **Previous page** / **Next page**, Page Up / Page Down, or typing a page number jump straight to a page. The page number shown is the page in the middle of the window. |
 | Jump to a page | Click its thumbnail in the **Pages** panel on the left. |
-| Zoom | **Zoom in** / **Zoom out**, or hold Ctrl and scroll. **Fit page** shows the whole page. |
+| Zoom | **Zoom in** / **Zoom out**, or hold Ctrl and scroll (zooms around the mouse pointer). **Fit page** shows the whole page. You can zoom to 6400 %, even on very large sheets. |
 | Move around a zoomed page | Press and hold the **middle mouse button** (the wheel) and drag. The scroll bars and the wheel work too. |
 | Turn the page | **Rotate left** / **Rotate right**. This only turns the view; the file is not changed. |
 | Find text | **Edit > Find** (Ctrl+F), type the text and press Enter. Results are highlighted; Enter or **Find next** / **Find previous** moves between them, across all pages. |
@@ -63,8 +63,8 @@ their title to another side or out into their own window.
   the font and a stand-in is shown. A printer may reject such a file.
 - A box only appears if the file defines it. A page without a CropBox is
   cropped to its MediaBox, so the Crop switch then shows the page edge.
-- Very large sheets cannot be zoomed in without limit yet: one page is drawn
-  as a single picture of at most 32 megapixels.
+- While you zoom, the page is first shown slightly blurred and then sharpens
+  within a moment: only the part on screen is drawn at the new size.
 - If no CMYK profile is selected, colours on screen are only approximate and
   the Output Preview window says so. Ink percentages are still correct.
 
@@ -75,7 +75,8 @@ their title to another side or out into their own window.
 3. The standard the file claims is already selected. Pick another one if you
    want: PDF/X-1a:2001, PDF/X-1a:2003, PDF/X-3:2002, PDF/X-3:2003 or PDF/X-4.
 4. Press **Check**. You get **Passed** or **Failed** and a list of problems,
-   grouped by kind, each with its page number.
+   grouped by kind, each with its page number. A problem found on several
+   pages is listed once, with the pages underneath it.
 5. Click a problem. The app goes to that page and puts a pink frame around
    the object. The full explanation appears under the list.
 6. **Save report…** writes the result as a PDF, a web page, or a JSON file
@@ -87,7 +88,7 @@ What is checked:
 |---|---|
 | Identification | Is the file marked as the standard you chose? |
 | Output intent | Is there exactly one, does it name the printing condition, is the profile a printer profile? |
-| Metadata | Title, creation and change date, "Trapped" set to True or False |
+| Metadata | Title, creation and change date, "Trapped" set to True or False. For PDF/X-4 also the XMP metadata: title, Trapped, version number and rendition class present, the standard prefixes (`xmp`, `xmpMM`, ...), and the document information (Creator, Producer, dates, ...) agreeing with it |
 | Page boxes | TrimBox or ArtBox on every page, boxes inside one another correctly |
 | Fonts | Every font embedded |
 | Colour | PDF/X-1a: only CMYK, grey and spot colours. PDF/X-3 and X-4: no plain (device) RGB when printing in CMYK |
@@ -224,8 +225,8 @@ them correctly.
 
 ## What is planned
 
-1. **Rest of the viewer:** continuous scrolling through all pages, faster
-   display of very large sheets, a macOS version.
+1. **Rest of the viewer:** a macOS version, sharper display on high-resolution
+   (HiDPI) screens.
 2. **Preflight fix-ups:** repair what the check finds (convert colours,
    embed fonts, set page boxes, set the output intent), and PDF/X-6.
 3. **Editing:** move, delete and recolour objects; reorder and rotate pages —

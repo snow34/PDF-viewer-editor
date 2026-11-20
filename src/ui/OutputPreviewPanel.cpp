@@ -159,6 +159,15 @@ engine::DisplayIntent OutputPreviewPanel::intent() const
     return engine::DisplayIntent(m_intent->currentData().toInt());
 }
 
+QStringList OutputPreviewPanel::hiddenInks() const
+{
+    QStringList hidden;
+    for (int i = 0; i < m_inks->topLevelItemCount(); ++i)
+        if (m_inks->topLevelItem(i)->checkState(0) != Qt::Checked)
+            hidden << m_inks->topLevelItem(i)->text(0);
+    return hidden;
+}
+
 std::vector<bool> OutputPreviewPanel::visibleInks() const
 {
     std::vector<bool> v;

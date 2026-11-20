@@ -6,6 +6,7 @@
 
 #include "MuPdfUtil.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 
@@ -203,6 +204,8 @@ std::unique_ptr<Document> Document::open(const QString &path, QString *error)
 
 Document::~Document()
 {
+    for (Prepared &p : m_prepared)
+        dropPrepared(p);
     if (m_ctx) {
         fz_drop_document(m_ctx, m_doc);
         fz_drop_context(m_ctx);
@@ -322,7 +325,99 @@ QSizeF Document::pageSize(int pageNo)
     return QSizeF(r.x1 - r.x0, r.y1 - r.y0);
 }
 
+void Document::dropPrepared(Prepared &p)
+{
+    fz_drop_separations(m_ctx, p.seps);
+    fz_drop_display_list(m_ctx, p.list);
+    fz_drop_page(m_ctx, p.fzPage);
+    p = Prepared();
+}
+
+Document::Prepared *Document::prepare(int pageNo)
+{
+    for (size_t i = 0; i < m_prepared.size(); ++i) {
+        if (m_prepared[i].page == pageNo) {
+            std::rotate(m_prepared.begin(), m_prepared.begin() + ptrdiff_t(i), m_prepared.begin() + ptrdiff_t(i) + 1);
+            return &m_prepared.front();
+        }
+    }
+    constexpr size_t kKeep = 6;
+    fz_context *ctx = m_ctx;
+    Prepared p;
+    p.page = pageNo;
+    fz_try(ctx)
+    {
+        p.fzPage = fz_load_page(ctx, m_doc, pageNo);
+        p.list = fz_new_display_list_from_page(ctx, p.fzPage);
+        p.seps = fz_page_separations(ctx, p.fzPage);
+        const int spots = p.seps ? fz_count_separations(ctx, p.seps) : 0;
+        for (int i = 0; i < spots; ++i)
+            fz_set_separation_behavior(ctx, p.seps, i, FZ_SEPARATION_SPOT);
+
+        // Page boxes in the page's own top-left coordinate system (rotation 0).
+        const fz_matrix view = viewMatrix(fz_bound_page(ctx, p.fzPage), 0);
+        if (pdf_page *pp = pdf_page_from_fz_page(ctx, p.fzPage)) {
+            fz_rect cropped;
+            fz_matrix pm;
+            pdf_page_transform(ctx, pp, &cropped, &pm);
+            auto box = [&](pdf_obj *key, bool inherit, bool *present) {
+                pdf_obj *o = inherit ? pdf_dict_get_inheritable(ctx, pp->obj, key)
+                                     : pdf_dict_get(ctx, pp->obj, key);
+                const bool ok = pdf_is_array(ctx, o) && pdf_array_len(ctx, o) == 4;
+                if (present)
+                    *present = ok;
+                return ok ? toQRect(fz_transform_rect(pdf_to_rect(ctx, o), fz_concat(pm, view)))
+                          : QRectF();
+            };
+            p.boxes.media = box(PDF_NAME(MediaBox), true, nullptr);
+            p.boxes.crop = box(PDF_NAME(CropBox), true, &p.boxes.hasCrop);
+            p.boxes.bleed = box(PDF_NAME(BleedBox), false, &p.boxes.hasBleed);
+            p.boxes.trim = box(PDF_NAME(TrimBox), false, &p.boxes.hasTrim);
+            p.boxes.art = box(PDF_NAME(ArtBox), false, &p.boxes.hasArt);
+        } else {
+            p.boxes.media = toQRect(fz_transform_rect(fz_bound_page(ctx, p.fzPage), view));
+        }
+    }
+    fz_catch(ctx)
+    {
+        dropPrepared(p);
+        fz_rethrow(ctx);
+    }
+    if (m_prepared.size() >= kKeep) {
+        dropPrepared(m_prepared.back());
+        m_prepared.pop_back();
+    }
+    m_prepared.insert(m_prepared.begin(), p);
+    return &m_prepared.front();
+}
+
+PageInfo Document::pageInfo(int pageNo)
+{
+    PageInfo info;
+    fz_context *ctx = m_ctx;
+    fz_try(ctx)
+    {
+        Prepared *p = prepare(pageNo);
+        const fz_rect bounds = fz_bound_page(ctx, p->fzPage);
+        info.size = QSizeF(bounds.x1 - bounds.x0, bounds.y1 - bounds.y0);
+        info.boxes = p->boxes;
+        const int spots = p->seps ? fz_count_separations(ctx, p->seps) : 0;
+        for (int i = 0; i < spots; ++i)
+            info.spots << QString::fromUtf8(fz_separation_name(ctx, p->seps, i));
+    }
+    fz_catch(ctx)
+    {
+        // A damaged page shows as an empty page of size 0; rendering it reports the error.
+    }
+    return info;
+}
+
 PageRender Document::render(int pageNo, double zoom, int rotation)
+{
+    return renderTile(pageNo, zoom, rotation, QRect(0, 0, 1 << 30, 1 << 30));
+}
+
+PageRender Document::renderTile(int pageNo, double zoom, int rotation, const QRect &area)
 {
     PageRender out;
     out.page = pageNo;
@@ -333,46 +428,44 @@ PageRender Document::render(int pageNo, double zoom, int rotation)
                     QStringLiteral("Black") };
 
     fz_context *ctx = m_ctx;
-    fz_page *page = nullptr;
-    fz_separations *seps = nullptr;
     fz_pixmap *pix = nullptr;
     fz_device *dev = nullptr;
     char message[256] = "";
-    fz_var(page);
-    fz_var(seps);
     fz_var(pix);
     fz_var(dev);
 
     fz_try(ctx)
     {
-        page = fz_load_page(ctx, m_doc, pageNo);
-        const fz_rect bounds = fz_bound_page(ctx, page);
+        Prepared *p = prepare(pageNo);
+        const fz_rect bounds = fz_bound_page(ctx, p->fzPage);
         const fz_matrix view = viewMatrix(bounds, rotation);
         const fz_matrix ctm = fz_concat(view, fz_scale(float(zoom), float(zoom)));
-        const fz_irect bbox = fz_round_rect(fz_transform_rect(bounds, ctm));
+        fz_irect bbox = fz_round_rect(fz_transform_rect(bounds, ctm));
+        bbox = fz_intersect_irect(bbox, fz_make_irect(area.left(), area.top(), area.left() + area.width(),
+                                                      area.top() + area.height()));
+        if (fz_is_empty_irect(bbox))
+            fz_throw(ctx, FZ_ERROR_GENERIC, "The requested area lies outside the page.");
 
         // Render into the document's own CMYK space so DeviceCMYK values in
         // the file arrive unchanged in the ink channels.
         fz_colorspace *cs = fz_document_output_intent(ctx, m_doc);
         if (!cs || fz_colorspace_n(ctx, cs) != 4)
             cs = fz_device_cmyk(ctx);
+        const int spots = p->seps ? fz_count_separations(ctx, p->seps) : 0;
 
-        seps = fz_page_separations(ctx, page);
-        const int spots = seps ? fz_count_separations(ctx, seps) : 0;
-        for (int i = 0; i < spots; ++i)
-            fz_set_separation_behavior(ctx, seps, i, FZ_SEPARATION_SPOT);
-
-        pix = fz_new_pixmap_with_bbox(ctx, cs, bbox, seps, 0);
+        pix = fz_new_pixmap_with_bbox(ctx, cs, bbox, p->seps, 0);
         fz_clear_pixmap_with_value(ctx, pix, 255);
-        dev = fz_new_draw_device(ctx, ctm, pix);
-        fz_run_page(ctx, page, dev, fz_identity, nullptr);
+        // The transform goes to the display list, so the clip rectangle can be
+        // given in pixels and only the objects inside it are drawn.
+        dev = fz_new_draw_device(ctx, fz_identity, pix);
+        fz_run_display_list(ctx, p->list, dev, ctm, fz_rect_from_irect(bbox), nullptr);
         fz_close_device(ctx, dev);
 
         for (int i = 0; i < spots; ++i) {
             float eq[4] = { 0, 0, 0, 0 };
-            fz_separation_equivalent(ctx, seps, i, cs, eq, nullptr, fz_default_color_params);
+            fz_separation_equivalent(ctx, p->seps, i, cs, eq, nullptr, fz_default_color_params);
             image->spotCmyk.push_back({ eq[0], eq[1], eq[2], eq[3] });
-            image->inks.append(QString::fromUtf8(fz_separation_name(ctx, seps, i)));
+            image->inks.append(QString::fromUtf8(fz_separation_name(ctx, p->seps, i)));
         }
 
         const int w = fz_pixmap_width(ctx, pix);
@@ -388,34 +481,29 @@ PageRender Document::render(int pageNo, double zoom, int rotation)
         for (int y = 0; y < h; ++y)
             std::memcpy(image->data.data() + size_t(y) * size_t(w) * size_t(n), src + y * stride,
                         size_t(w) * size_t(n));
+        out.area = QRect(bbox.x0, bbox.y0, w, h);
 
-        // Page boxes, moved into the same top-left coordinate system.
-        if (pdf_page *pp = pdf_page_from_fz_page(ctx, page)) {
-            fz_rect cropped;
-            fz_matrix pm;
-            pdf_page_transform(ctx, pp, &cropped, &pm);
-            auto box = [&](pdf_obj *key, bool inherit, bool *present) {
-                pdf_obj *o = inherit ? pdf_dict_get_inheritable(ctx, pp->obj, key)
-                                     : pdf_dict_get(ctx, pp->obj, key);
-                const bool ok = pdf_is_array(ctx, o) && pdf_array_len(ctx, o) == 4;
-                if (present)
-                    *present = ok;
-                return ok ? toQRect(fz_transform_rect(pdf_to_rect(ctx, o), fz_concat(pm, view)))
-                          : QRectF();
+        // Page boxes in the rotated view.
+        out.boxes = p->boxes;
+        if (rotation != 0) {
+            const fz_matrix turn = fz_concat(fz_invert_matrix(viewMatrix(bounds, 0)), view);
+            auto turned = [&](const QRectF &r) {
+                return r.isNull() ? r
+                                  : toQRect(fz_transform_rect(fz_make_rect(float(r.left()), float(r.top()),
+                                                                           float(r.right()), float(r.bottom())),
+                                                              turn));
             };
-            out.boxes.media = box(PDF_NAME(MediaBox), true, nullptr);
-            out.boxes.crop = box(PDF_NAME(CropBox), true, &out.boxes.hasCrop);
-            out.boxes.bleed = box(PDF_NAME(BleedBox), false, &out.boxes.hasBleed);
-            out.boxes.trim = box(PDF_NAME(TrimBox), false, &out.boxes.hasTrim);
-            out.boxes.art = box(PDF_NAME(ArtBox), false, &out.boxes.hasArt);
+            out.boxes.media = turned(out.boxes.media);
+            out.boxes.crop = turned(out.boxes.crop);
+            out.boxes.bleed = turned(out.boxes.bleed);
+            out.boxes.trim = turned(out.boxes.trim);
+            out.boxes.art = turned(out.boxes.art);
         }
     }
     fz_always(ctx)
     {
         fz_drop_device(ctx, dev);
         fz_drop_pixmap(ctx, pix);
-        fz_drop_separations(ctx, seps);
-        fz_drop_page(ctx, page);
     }
     fz_catch(ctx)
     {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Customization.h"
+#include "TileKey.h"
 #include "engine/Compositor.h"
 #include "engine/ProfileLibrary.h"
 #include "engine/Types.h"
@@ -39,11 +40,12 @@ public:
 
 signals:
     void requestOpen(const QString &path);
-    void requestRender(int page, double zoom, int rotation, int requestId);
+    void requestTiles(const QList<TileKey> &tiles, double zoom, int rotation, int generation, int batchId);
     void requestThumbnail(int page, int size, int rotation, const engine::CompositeOptions &options,
                           int generation);
-    void requestComposite(const std::shared_ptr<engine::SeparatedImage> &image,
-                          const engine::CompositeOptions &options, int requestId);
+    void requestTileComposite(const TileKey &key, int generation, int optionsId,
+                              const std::shared_ptr<engine::SeparatedImage> &image, const QRect &area,
+                              const engine::CompositeOptions &options);
     void requestSearch(const QString &text, int rotation, int searchId);
     void requestInspect(int page, QPointF point, int rotation);
     void requestPreflight(int standard, int checkId);
@@ -64,10 +66,19 @@ private:
     void showItemList();
     void resetCustomization();
     void chooseFile();
-    void onOpened(const engine::DocumentInfo &info, const QList<QSizeF> &sizes);
-    void onRendered(const engine::PageRender &render, int requestId);
+    void onOpened(const engine::DocumentInfo &info, const QList<engine::PageInfo> &pages);
+    void layoutPages();
+    engine::PageBoxes rotatedBoxes(int page) const;
+    void scheduleTiles();
+    void onTileRendered(const TileKey &key, const engine::PageRender &render, int generation);
+    void composeTile(const TileKey &key);
+    void onTileComposed(const TileKey &key, int generation, int optionsId, const QImage &image, const QRect &area,
+                        bool calibrated);
+    void evictStore();
+    void showInkValues();
+    void onCurrentPageChanged(int page);
+    void maybeTakeScreenshot();
     void onThumbnail(int page, const QImage &image, int generation);
-    void onComposed(const QImage &image, bool calibrated, int requestId);
     void requestNextThumbnail(int page);
     void restartThumbnails();
     void rotateBy(int degrees);
@@ -83,10 +94,10 @@ private:
     void showFinding(const preflight::Finding &finding);
     QRectF toCurrentRotation(const QRectF &rect, int page) const;
     void goToPage(int page);
-    void zoomBy(int steps);
+    void zoomBy(int steps, QPoint anchor = QPoint(-1, -1));
+    void setZoom(double zoom, QPoint anchor = QPoint(-1, -1));
     void setFit(bool fit);
     double fitZoom() const;
-    void render();
     void recomposite();
     void refreshProfiles();
     void updateBanner();
@@ -103,13 +114,28 @@ private:
     engine::ProfileLibrary m_library;
 
     engine::DocumentInfo m_info;
-    QList<QSizeF> m_sizes;
-    engine::PageRender m_render;  // newest render received
-    engine::PageRender m_pending; // render whose screen image is being prepared
-    engine::PageRender m_shown;   // render the view is showing right now
+    QList<engine::PageInfo> m_pages;
+    QList<QSizeF> m_sizes;  // points, rotation 0
+    QStringList m_allInks;  // process inks and every spot ink in the document
+
+    // Ink channels of the tiles the view needs, for the current zoom and
+    // rotation (generation). Kept for ink readout and for compositing again
+    // when the display settings change.
+    struct StoredTile {
+        std::shared_ptr<engine::SeparatedImage> image;
+        QRect area;
+    };
+    QHash<TileKey, StoredTile> m_store;
+    int m_storeGeneration = -1;
+    int m_batchId = 0;
+    engine::CompositeOptions m_options; // display settings for every tile
+    int m_optionsId = 0;
+    QTimer *m_scheduleTimer = nullptr;
+    int m_hoverPage = -1;
+    QPointF m_hoverPoint;
+
     QThread m_compositeThread;
     CompositeWorker *m_compositor = nullptr;
-    int m_compositeId = 0;
     QTimer *m_resizeTimer = nullptr;
     // Profile files are read once, not on every screen update.
     mutable QString m_simulationPath, m_monitorPath;
@@ -118,7 +144,6 @@ private:
     int m_page = 0;
     double m_zoom = 1.0;
     bool m_fit = true;
-    int m_requestId = 0;
     int m_rotation = 0;
 
     QDockWidget *m_thumbnailDock;
@@ -132,10 +157,6 @@ private:
     QDockWidget *m_preflightDock;
     PreflightPanel *m_preflight;
     int m_preflightId = 0;
-    // Frame to draw once the page it belongs to has been rendered
-    // (rotation 0 coordinates).
-    int m_pendingFramePage = -1;
-    QRectF m_pendingFrame;
 
     QToolBar *m_searchBar;
     QLineEdit *m_searchField;

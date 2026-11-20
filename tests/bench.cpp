@@ -40,5 +40,26 @@ int main(int argc, char **argv)
                    .arg(secondMs, 5);
         out.flush();
     }
+
+    // What the viewer does now: only the tiles that fill one 1920 x 1080 window.
+    out << "\ntiles for one 1920 x 1080 window (512 px tiles):\n";
+    for (double zoom : { 2.0, 10.0, 50.0 }) {
+        QElapsedTimer t;
+        t.start();
+        int tiles = 0;
+        for (int y = 0; y < 1080; y += 512)
+            for (int x = 0; x < 1920; x += 512) {
+                const PageRender tile = doc->renderTile(0, zoom, 0, QRect(x, y, 512, 512));
+                if (tile.image)
+                    composite(*tile.image, options);
+                ++tiles;
+            }
+        out << QStringLiteral("  zoom %1x (page %2 px wide): %3 tiles, render + composite %4 ms\n")
+                   .arg(zoom)
+                   .arg(int(300 * zoom))
+                   .arg(tiles)
+                   .arg(t.elapsed());
+        out.flush();
+    }
     return 0;
 }

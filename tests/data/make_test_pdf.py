@@ -150,15 +150,18 @@ pdfx("x1a_lowres.pdf", content=b"q 144 0 0 144 30 120 cm /Im1 Do Q", resources=b
      extra=[b"<< /Type /XObject /Subtype /Image /Width 20 /Height 20 /ColorSpace /DeviceGray"
             b" /BitsPerComponent 8 /Length 400 >>\nstream\n" + b"\x80" * 400 + b"\nendstream"])
 
-# x4_no_profile.pdf: marked PDF/X-4 in XMP, 50 % opacity (allowed in X-4), but
-# the output intent has no embedded profile, which X-4 requires.
+# x4_no_profile.pdf: marked PDF/X-4 in XMP, 50 % opacity (allowed in X-4), the
+# document information in step with the XMP (one date written with a time
+# zone), but the output intent has no embedded profile, which X-4 requires.
 XMP4 = (b'<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
         b'<rdf:Description rdf:about="" xmlns:pdfxid="http://www.npes.org/pdfx/ns/id/"'
         b' xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:xmp="http://ns.adobe.com/xap/1.0/"'
-        b' xmlns:pdf="http://ns.adobe.com/pdf/1.3/">'
+        b' xmlns:pdf="http://ns.adobe.com/pdf/1.3/" xmlns:xmpMM="http://ns.adobe.com/xap/1.0/mm/"'
+        b' xmpMM:VersionID="1" xmpMM:RenditionClass="default">'
         b"<pdfxid:GTS_PDFXVersion>PDF/X-4</pdfxid:GTS_PDFXVersion>"
         b'<dc:title><rdf:Alt><rdf:li xml:lang="x-default">Test</rdf:li></rdf:Alt></dc:title>'
         b"<xmp:CreateDate>2024-01-01T00:00:00Z</xmp:CreateDate><xmp:ModifyDate>2024-01-01T00:00:00Z</xmp:ModifyDate>"
+        b"<xmp:CreatorTool>Test writer</xmp:CreatorTool>"
         b"<pdf:Trapped>False</pdf:Trapped>"
         b"</rdf:Description></rdf:RDF></x:xmpmeta>")
 write(out_dir + "/x4_no_profile.pdf", [
@@ -168,7 +171,37 @@ write(out_dir + "/x4_no_profile.pdf", [
     b" /Resources << /ExtGState << /GS0 << /Type /ExtGState /ca 0.5 >> >> >> >>",
     stream(b"/GS0 gs 0 0 0 1 k 50 50 200 200 re f"),
     b"<< /Type /Metadata /Subtype /XML /Length %d >>\nstream\n" % len(XMP4) + XMP4 + b"\nendstream",
-])
+    b"<< /Title (Test) /Creator (Test writer) /CreationDate (D:20240101000000Z)"
+    b" /ModDate (D:20240101020000+02'00') /Trapped /False >>",
+], b"/Info 6 0 R")
+
+# x4_acrobat_comparison.pdf: rebuilds the problems Acrobat Preflight reported
+# for a real file checked as PDF/X-4: no PDF/X marker, no output intent, no
+# TrimBox on any of the 3 pages, older "xap"/"xapMM" XMP prefixes, no
+# VersionID or RenditionClass, no dc:title, no pdf:Trapped, and Creator and
+# Producer in the document information that the XMP does not repeat.
+XMP_OLD = (b'<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>'
+           b'<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
+           b'<rdf:Description rdf:about="" xmlns:xap="http://ns.adobe.com/xap/1.0/">'
+           b"<xap:CreateDate>2024-01-01T00:00:00Z</xap:CreateDate>"
+           b"<xap:ModifyDate>2024-01-01T00:00:00Z</xap:ModifyDate>"
+           b"<xap:CreatorTool>Some other program</xap:CreatorTool>"
+           b"</rdf:Description>"
+           b'<rdf:Description rdf:about="" xmlns:xapMM="http://ns.adobe.com/xap/1.0/mm/">'
+           b"<xapMM:DocumentID>uuid:1234</xapMM:DocumentID>"
+           b"</rdf:Description>"
+           b'</rdf:RDF></x:xmpmeta><?xpacket end="w"?>')
+write(out_dir + "/x4_acrobat_comparison.pdf", [
+    b"<< /Type /Catalog /Pages 2 0 R /Metadata 7 0 R >>",
+    b"<< /Type /Pages /Kids [3 0 R 5 0 R 6 0 R] /Count 3 >>",
+    b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R >>",
+    stream(b"0 0 0 1 k 50 50 200 200 re f"),
+    b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R >>",
+    b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Contents 4 0 R >>",
+    b"<< /Type /Metadata /Subtype /XML /Length %d >>\nstream\n" % len(XMP_OLD) + XMP_OLD + b"\nendstream",
+    b"<< /Creator (Acrobat PDFMaker) /Producer (Adobe PDF Library) /CreationDate (D:20240101000000Z)"
+    b" /ModDate (D:20240101000000Z) >>",
+], b"/Info 8 0 R")
 
 # x1a_two_pages.pdf: page 1 is clean, page 2 has an RGB square at (100,100) 50 x 50.
 write(out_dir + "/x1a_two_pages.pdf", [

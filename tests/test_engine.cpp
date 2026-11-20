@@ -5,6 +5,8 @@
 #include <QTemporaryDir>
 #include <QtTest>
 
+#include <cstring>
+
 using namespace engine;
 
 class TestEngine : public QObject {
@@ -217,6 +219,59 @@ private slots:
         QCOMPARE(stacked.at(0).values, QStringList({ "Red 255", "Green 0", "Blue 0" }));
         QCOMPARE(stacked.at(1).values, QStringList({ "Cyan 10 %", "Magenta 20 %", "Yellow 30 %", "Black 0 %" }));
         QVERIFY(!stacked.at(0).overprint);
+    }
+
+    void tilesMatchTheFullPage()
+    {
+        // Every tile must be pixel-for-pixel what the full render has at the
+        // same place, including the overprint overlap and the spot colour.
+        const SeparatedImage &full = *render.image;
+        const int n = full.channels();
+        const QList<QRect> areas{ QRect(0, 0, 256, 256), QRect(100, 300, 128, 128), QRect(256, 256, 256, 256),
+                                  QRect(512, 512, 512, 512) /* clipped to 88 x 88 */,
+                                  QRect(170, 90, 300, 40) };
+        for (const QRect &area : areas) {
+            const PageRender tile = doc->renderTile(0, zoom, 0, area);
+            QVERIFY2(tile.image, qPrintable(tile.error));
+            QCOMPARE(tile.image->inks, full.inks);
+            QCOMPARE(tile.area, area.intersected(QRect(0, 0, 600, 600)));
+            QCOMPARE(tile.image->width, tile.area.width());
+            QCOMPARE(tile.image->height, tile.area.height());
+            for (int y = 0; y < tile.area.height(); ++y)
+                QVERIFY2(std::memcmp(tile.image->pixel(0, y), full.pixel(tile.area.left(), tile.area.top() + y),
+                                     size_t(tile.area.width() * n))
+                             == 0,
+                         qPrintable(QStringLiteral("area %1,%2 row %3 differs")
+                                        .arg(area.x())
+                                        .arg(area.y())
+                                        .arg(y)));
+        }
+        QVERIFY(!doc->renderTile(0, zoom, 0, QRect(700, 700, 10, 10)).image); // outside the page
+    }
+
+    void tilesAtHighZoom()
+    {
+        // 50x is a 15000 x 15000 pixel page: far too big to draw whole, but one
+        // tile of it is quick. Patch A (40/30/20/10) covers PDF x 20..80, y 220..280.
+        const double big = 50.0;
+        const QRect area(int(40 * big), int((300 - 260) * big), 512, 512);
+        const PageRender tile = doc->renderTile(0, big, 0, area);
+        QVERIFY2(tile.image, qPrintable(tile.error));
+        QCOMPARE(tile.area, area);
+        compare(inkValues(*tile.image, 256, 256, 5), { 40, 30, 20, 10, 0 });
+    }
+
+    void pageInfo()
+    {
+        const PageInfo info = doc->pageInfo(0);
+        QCOMPARE(info.size, QSizeF(300, 300));
+        QCOMPARE(info.spots, QStringList({ "PANTONE 185 C" }));
+        QVERIFY(info.boxes.hasTrim && info.boxes.hasBleed && !info.boxes.hasArt);
+        QCOMPARE(info.boxes.trim, QRectF(10, 10, 280, 280));
+        // Boxes in a rotated render are turned with the page.
+        const PageRender turned = doc->renderTile(0, 1.0, 90, QRect(0, 0, 50, 50));
+        QCOMPARE(turned.boxes.trim, QRectF(10, 10, 280, 280));
+        QCOMPARE(turned.boxes.bleed, QRectF(2, 2, 296, 296));
     }
 
     void profileLibrary()

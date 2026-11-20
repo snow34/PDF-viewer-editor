@@ -1,4 +1,5 @@
 #include "Preflight.h"
+#include "Xmp.h"
 
 #include "engine/Document.h"
 #include "engine/MuPdfUtil.h"
@@ -329,16 +330,6 @@ void pfBeginGroup(fz_context *, fz_device *dev, fz_rect area, fz_colorspace *, i
 
 // --------------------------------------------------------- structural checks
 
-QString xmpValue(const QString &xmp, const QString &name)
-{
-    const QRegularExpression re(QRegularExpression::escape(name)
-                                + QStringLiteral("\\s*(?:=\\s*[\"']([^\"']*)[\"']|>\\s*([^<]*?)\\s*<)"));
-    const auto m = re.match(xmp);
-    if (!m.hasMatch())
-        return {};
-    return m.captured(1).isEmpty() ? m.captured(2) : m.captured(1);
-}
-
 QString loadXmp(fz_context *ctx, pdf_obj *root)
 {
     QString xmp;
@@ -364,12 +355,12 @@ QString loadXmp(fz_context *ctx, pdf_obj *root)
     return xmp;
 }
 
-void checkIdentification(Checker &c, pdf_obj *info, const QString &xmp)
+void checkIdentification(Checker &c, pdf_obj *info, const Xmp &xmp)
 {
     fz_context *ctx = c.ctx;
     const QString infoVersion = pdfText(ctx, pdf_dict_gets(ctx, info, "GTS_PDFXVersion"));
     const QString conformance = pdfText(ctx, pdf_dict_gets(ctx, info, "GTS_PDFXConformance"));
-    const QString xmpVersion = xmpValue(xmp, QStringLiteral("GTS_PDFXVersion"));
+    const QString xmpVersion = xmp.value(xmpns::pdfxid, QStringLiteral("GTS_PDFXVersion"));
     const QString wanted = standardName(c.standard);
 
     QString claimed;
@@ -508,41 +499,147 @@ void checkOutputIntent(Checker &c, pdf_obj *root)
                   .arg(profile.colorSpace));
 }
 
-void checkMetadata(Checker &c, pdf_obj *root, pdf_obj *info, const QString &xmp)
+// PDF/X-4 metadata lives in XMP. These are the XMP requirements that
+// Acrobat Preflight's PDF/X-4 profile reports (see HANDOFF.md).
+void checkXmpForX4(Checker &c, pdf_obj *info, const Xmp &xmp)
 {
     fz_context *ctx = c.ctx;
-    if (isX4(c.standard) && xmp.isEmpty())
+    if (!xmp.present) {
         c.add("meta.xmp", "Metadata", Severity::Error,
               QStringLiteral("The file has no XMP metadata. PDF/X-4 requires it."));
-    Q_UNUSED(root);
+        return;
+    }
+    if (!xmp.readable) {
+        c.add("meta.xmpInvalid", "Metadata", Severity::Error,
+              QStringLiteral("The XMP metadata is not valid XML (%1).").arg(xmp.problem));
+        return;
+    }
 
-    static const QRegularExpression titleRe(QStringLiteral("<dc:title>.*?<rdf:li[^>]*>\\s*([^<]+?)\\s*<"),
-                                            QRegularExpression::DotMatchesEverythingOption);
-    const bool hasTitle = !pdfText(ctx, pdf_dict_gets(ctx, info, "Title")).trimmed().isEmpty()
-                          || titleRe.match(xmp).hasMatch();
-    if (!hasTitle)
-        c.add("meta.title", "Metadata", Severity::Error, QStringLiteral("The document has no title."));
+    if (xmp.value(xmpns::dc, QStringLiteral("title")).isEmpty())
+        c.add("meta.title", "Metadata", Severity::Error,
+              QStringLiteral("The XMP metadata has no document title (dc:title)."));
+    const QString trapped = xmp.value(xmpns::pdf, QStringLiteral("Trapped"));
+    if (trapped != QLatin1String("True") && trapped != QLatin1String("False"))
+        c.add("meta.trapped", "Metadata", Severity::Error,
+              trapped.isEmpty()
+                  ? QStringLiteral("The XMP metadata does not say whether the file has been trapped "
+                                   "(pdf:Trapped must be True or False).")
+                  : QStringLiteral("pdf:Trapped in the XMP metadata is \"%1\"; it must be True or False.").arg(trapped));
+    if (xmp.value(xmpns::xmpMM, QStringLiteral("VersionID")).isEmpty())
+        c.add("meta.versionId", "Metadata", Severity::Error,
+              QStringLiteral("The XMP metadata has no version number (xmpMM:VersionID)."));
+    if (xmp.value(xmpns::xmpMM, QStringLiteral("RenditionClass")).isEmpty())
+        c.add("meta.renditionClass", "Metadata", Severity::Error,
+              QStringLiteral("The XMP metadata has no rendition class (xmpMM:RenditionClass)."));
 
+    // Standard prefixes. Acrobat reports the XMP Basic and Media Management
+    // ones as errors; the others are checked the same way but only warned about.
+    struct Schema {
+        const QString *uri;
+        const char *prefix;
+        const char *name;
+        Severity severity;
+    };
+    const Schema schemas[] = {
+        { &xmpns::xmp, "xmp", "XMP Basic", Severity::Error },
+        { &xmpns::xmpMM, "xmpMM", "XMP Media Management", Severity::Error },
+        { &xmpns::dc, "dc", "Dublin Core", Severity::Warning },
+        { &xmpns::pdf, "pdf", "Adobe PDF", Severity::Warning },
+        { &xmpns::pdfxid, "pdfxid", "PDF/X identification", Severity::Warning },
+    };
+    QSet<QString> reported;
+    for (const auto &[prefix, uri] : xmp.prefixes) {
+        for (const Schema &schema : schemas) {
+            if (uri != *schema.uri || prefix == QLatin1String(schema.prefix) || reported.contains(uri))
+                continue;
+            reported.insert(uri);
+            c.add("meta.xmpPrefix", "Metadata", schema.severity,
+                  QStringLiteral("The %1 schema in the XMP metadata uses the prefix \"%2\"; it must be \"%3\".")
+                      .arg(QLatin1String(schema.name), prefix, QLatin1String(schema.prefix)));
+        }
+    }
+
+    // What the document information says must agree with the XMP metadata.
+    struct Pair {
+        const char *infoKey;
+        const QString *ns;
+        const char *property;
+        const char *label;
+        bool date;
+        bool reportedAbove; // missing from XMP is already reported by its own rule
+    };
+    const Pair pairs[] = {
+        { "Title", &xmpns::dc, "title", "dc:title", false, true },
+        { "Author", &xmpns::dc, "creator", "dc:creator", false, false },
+        { "Subject", &xmpns::dc, "description", "dc:description", false, false },
+        { "Keywords", &xmpns::pdf, "Keywords", "pdf:Keywords", false, false },
+        { "Creator", &xmpns::xmp, "CreatorTool", "xmp:CreatorTool", false, false },
+        { "Producer", &xmpns::pdf, "Producer", "pdf:Producer", false, false },
+        { "CreationDate", &xmpns::xmp, "CreateDate", "xmp:CreateDate", true, false },
+        { "ModDate", &xmpns::xmp, "ModifyDate", "xmp:ModifyDate", true, false },
+        { "Trapped", &xmpns::pdf, "Trapped", "pdf:Trapped", false, true },
+    };
+    for (const Pair &pair : pairs) {
+        const QString infoValue = pdfText(ctx, pdf_dict_gets(ctx, info, pair.infoKey)).trimmed();
+        if (infoValue.isEmpty())
+            continue;
+        const QString xmpValue = xmp.value(*pair.ns, QLatin1String(pair.property));
+        const QString key = QLatin1String(pair.infoKey);
+        if (xmpValue.isEmpty()) {
+            if (!pair.reportedAbove)
+                c.add("meta.infoXmpMismatch", "Metadata", Severity::Error,
+                      QStringLiteral("%1 is set in the document information (\"%2\") but missing from the XMP "
+                                     "metadata (%3).")
+                          .arg(key, infoValue, QLatin1String(pair.label)));
+            continue;
+        }
+        bool differ;
+        if (pair.date) {
+            const QDateTime a = parsePdfDate(infoValue), b = parseXmpDate(xmpValue);
+            differ = a.isValid() && b.isValid() && qAbs(a.secsTo(b)) > 1; // unreadable dates are not judged
+        } else {
+            differ = infoValue != xmpValue;
+        }
+        if (differ)
+            c.add("meta.infoXmpMismatch", "Metadata", Severity::Error,
+                  QStringLiteral("%1 differs: the document information says \"%2\", the XMP metadata (%3) says "
+                                 "\"%4\".")
+                      .arg(key, infoValue, QLatin1String(pair.label), xmpValue));
+    }
+}
+
+void checkMetadata(Checker &c, pdf_obj *info, const Xmp &xmp)
+{
+    fz_context *ctx = c.ctx;
+    if (isX4(c.standard)) {
+        checkXmpForX4(c, info, xmp);
+    } else {
+        const bool hasTitle = !pdfText(ctx, pdf_dict_gets(ctx, info, "Title")).trimmed().isEmpty()
+                              || !xmp.value(xmpns::dc, QStringLiteral("title")).isEmpty();
+        if (!hasTitle)
+            c.add("meta.title", "Metadata", Severity::Error, QStringLiteral("The document has no title."));
+        QString trapped = pdfText(ctx, pdf_dict_gets(ctx, info, "Trapped"));
+        if (trapped.isEmpty())
+            trapped = xmp.value(xmpns::pdf, QStringLiteral("Trapped"));
+        if (trapped != QLatin1String("True") && trapped != QLatin1String("False"))
+            c.add("meta.trapped", "Metadata", Severity::Error,
+                  trapped.isEmpty()
+                      ? QStringLiteral("The file does not say whether it has been trapped (Trapped must be "
+                                       "True or False).")
+                      : QStringLiteral("Trapped is \"%1\"; it must be True or False.").arg(trapped));
+    }
+
+    // Dates: from either place, for every standard.
     const bool hasCreated = pdf_dict_gets(ctx, info, "CreationDate")
-                            || !xmpValue(xmp, QStringLiteral("xmp:CreateDate")).isEmpty();
+                            || !xmp.value(xmpns::xmp, QStringLiteral("CreateDate")).isEmpty();
     if (!hasCreated)
         c.add("meta.creationDate", "Metadata", Severity::Error,
               QStringLiteral("The document has no creation date."));
     const bool hasModified = pdf_dict_gets(ctx, info, "ModDate")
-                             || !xmpValue(xmp, QStringLiteral("xmp:ModifyDate")).isEmpty();
+                             || !xmp.value(xmpns::xmp, QStringLiteral("ModifyDate")).isEmpty();
     if (!hasModified)
         c.add("meta.modDate", "Metadata", Severity::Error,
               QStringLiteral("The document has no modification date."));
-
-    QString trapped = pdfText(ctx, pdf_dict_gets(ctx, info, "Trapped"));
-    if (trapped.isEmpty())
-        trapped = xmpValue(xmp, QStringLiteral("pdf:Trapped"));
-    if (trapped != QLatin1String("True") && trapped != QLatin1String("False"))
-        c.add("meta.trapped", "Metadata", Severity::Error,
-              trapped.isEmpty()
-                  ? QStringLiteral("The file does not say whether it has been trapped (Trapped must be "
-                                   "True or False).")
-                  : QStringLiteral("Trapped is \"%1\"; it must be True or False.").arg(trapped));
 }
 
 void checkCatalog(Checker &c, pdf_obj *root)
@@ -891,17 +988,17 @@ Report run(engine::Document &document, Standard standard, const Options &options
     }
 
     fz_context *ctx = c.ctx;
-    QString xmp;
+    Xmp xmp;
     fz_try(ctx)
     {
         pdf_obj *trailer = pdf_trailer(ctx, c.pdf);
         pdf_obj *root = pdf_dict_gets(ctx, trailer, "Root");
         pdf_obj *info = pdf_dict_gets(ctx, trailer, "Info");
-        xmp = loadXmp(ctx, root);
+        xmp = parseXmp(loadXmp(ctx, root));
         checkIdentification(c, info, xmp);
         checkFile(c, trailer);
         checkOutputIntent(c, root);
-        checkMetadata(c, root, info, xmp);
+        checkMetadata(c, info, xmp);
         checkCatalog(c, root);
     }
     fz_catch(ctx)
