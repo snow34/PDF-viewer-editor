@@ -1,0 +1,5 @@
+# Test PDFs contain byte offsets: never convert their line endings.
+*.pdf binary
+*.icc binary
+*.ico binary
+*.png binary

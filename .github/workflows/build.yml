@@ -56,6 +56,13 @@ jobs:
           cmake --build build
       - name: Test
         run: ctest --test-dir build --output-on-failure
+      # If a test crashes its own output can be lost; run the window test again
+      # writing straight to a file, line by line, and show that.
+      - name: Window test log
+        if: failure()
+        run: |
+          QT_QPA_PLATFORM=offscreen build/test_ui.exe -v1 -o test_ui.log,txt || true
+          cat test_ui.log || true
       - name: Build installer
         run: |
           version=$(sed -n 's/^project(PrepressPdf VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
